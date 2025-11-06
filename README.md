@@ -14,7 +14,8 @@ This repository powers the **AI Bubble Pressure Score (AIBPS)** — a 0–100 co
 
 You can deploy this dashboard directly using **[Streamlit Community Cloud](https://streamlit.io/cloud)** — just click below:
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/main/aibps-v0-1/app/streamlit_app.py)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://aibps-v0-1-main.streamlit.app)
+
 
 ---
 
