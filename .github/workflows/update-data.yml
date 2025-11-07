@@ -55,19 +55,15 @@ jobs:
           [ -f src/aibps/compute.py ] && sed -n '1,120p' src/aibps/compute.py || echo "compute.py missing"
 
       # --- Market step: guard against old .rename( ) and fall back to safe script ---
-      - name: Fetch market proxies (yfinance)
+           - name: Fetch market proxies (SAFE)
         run: |
-          if [ -f src/aibps/fetch_market.py ] && grep -q "rename(" src/aibps/fetch_market.py; then
-            echo "::warning ::fetch_market.py contains .rename( — running fetch_market_safe.py instead"
-            python src/aibps/fetch_market_safe.py
-          elif [ -f src/aibps/fetch_market.py ]; then
-            python src/aibps/fetch_market.py
-          elif [ -f src/aibps/fetch_market_safe.py ]; then
-            echo "::warning ::fetch_market.py missing — running fetch_market_safe.py"
-            python src/aibps/fetch_market_safe.py
-          else
-            echo "::error ::No market fetch script found"; exit 1
-          fi
+          python src/aibps/fetch_market_safe.py
+
+      - name: Sanity print processed tails (after market)
+        run: |
+          echo "---- TAIL: data/processed/market_processed.csv ----"
+          [ -f data/processed/market_processed.csv ] && tail -n 10 data/processed/market_processed.csv || echo "missing"
+
 
       # --- Credit step (FRED) ---
       - name: Fetch credit (FRED)
