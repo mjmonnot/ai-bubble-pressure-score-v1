@@ -1,10 +1,4 @@
 # src/aibps/compute.py
-"""
-Combines processed inputs into pillar scores and the AIBPS composite.
-Writes:
-  - data/processed/aibps_monthly.csv
-Falls back to sample composite if inputs are missing.
-"""
 import os, sys, time
 import pandas as pd
 import numpy as np
@@ -23,64 +17,51 @@ def safe_read(path, **kwargs):
 
 def main():
     start = time.time()
-    # Load processed inputs if present
     market = safe_read(os.path.join(PRO_DIR, "market_processed.csv"), index_col=0, parse_dates=True)
     credit = safe_read(os.path.join(PRO_DIR, "credit_fred_processed.csv"), index_col=0, parse_dates=True)
 
     if market is None and credit is None:
-        # fallback to sample composite
         if os.path.exists(SAMPLE):
             print("ℹ️ Inputs missing → using sample composite.")
             df = pd.read_csv(SAMPLE, index_col=0, parse_dates=True)
-            out_path = os.path.join(PRO_DIR, "aibps_monthly.csv")
-            df.to_csv(out_path)
-            print(f"💾 Wrote sample composite → {out_path}")
+            df.to_csv(os.path.join(PRO_DIR, "aibps_monthly.csv"))
+            print("💾 Wrote sample composite → data/processed/aibps_monthly.csv")
             return
-        else:
-            raise RuntimeError("No inputs and no sample composite found.")
+        raise RuntimeError("No inputs and no sample composite found.")
 
-    # Build pillar frame monthly
+    # Merge monthly processed inputs
     frames = []
-    if market is not None:
-        frames.append(market)
-    if credit is not None:
-        frames.append(credit)
-
+    if market is not None: frames.append(market)
+    if credit is not None: frames.append(credit)
     df = pd.concat(frames, axis=1).sort_index()
-    # Map processed columns to pillars (v0.1 proxy)
-    # Market pillar from SOXX/QQQ percentiles
-    market_cols = [c for c in df.columns if c.startswith("MKT_")]
-    credit_cols = ["HY_OAS_pct", "IG_OAS_pct"] if "HY_OAS_pct" in df.columns else [c for c in df.columns if "OAS_pct" in c]
 
+    # Map processed columns to pillars (v0.1)
     out = pd.DataFrame(index=df.index)
-    if market_cols:
-        out["Market"] = df[market_cols].mean(axis=1)
-    if credit_cols:
-        ok = [c for c in credit_cols if c in df.columns]
-        if ok:
-            out["Credit"] = df[ok].mean(axis=1)
 
-    # Stub the other pillars to mid values if missing (keeps app working)
-    for p in ["Capex_Supply","Infra","Adoption"]:
-        if p not in out.columns:
-            out[p] = 55.0
+    mkt_cols = [c for c in df.columns if c.startswith("MKT_")]
+    if mkt_cols:
+        out["Market"] = df[mkt_cols].mean(axis=1)
 
-    # Ensure column order
-    pillars = ["Market","Capex_Supply","Infra","Adoption","Credit"]
+    cred_cols = [c for c in df.columns if c.endswith("_pct") and ("OAS" in c or "CREDIT" in c)]
+    if cred_cols:
+        out["Credit"] = df[cred_cols].mean(axis=1)
+
+    # Only use pillars that actually exist; do NOT inject 55s
+    pillars = [c for c in ["Market","Credit","Capex_Supply","Infra","Adoption"] if c in out.columns]
+    if not pillars:
+        raise RuntimeError("No pillar columns available after mapping.")
+
+    # Default weights (renormalize to present pillars only)
+    default_w = {"Market":0.25,"Capex_Supply":0.25,"Infra":0.20,"Adoption":0.15,"Credit":0.15}
+    w_vec = np.array([default_w[p] for p in pillars], dtype=float)
+    w_vec = w_vec / w_vec.sum()
+
     out = out[pillars].dropna(how="all")
-
-    # Default weights (app can override interactively)
-    w = np.array([0.25,0.25,0.20,0.15,0.15])
-    present = [p for p in pillars if p in out.columns]
-    w_adj = w[:len(present)]
-    w_adj = w_adj / w_adj.sum()
-
-    out["AIBPS"] = (out[present] * w_adj).sum(axis=1)
+    out["AIBPS"] = (out[pillars] * w_vec).sum(axis=1)
     out["AIBPS_RA"] = out["AIBPS"].rolling(3, min_periods=1).mean()
 
-    out_path = os.path.join(PRO_DIR, "aibps_monthly.csv")
-    out.to_csv(out_path)
-    print(f"💾 Wrote composite → {out_path}")
+    out.to_csv(os.path.join(PRO_DIR, "aibps_monthly.csv"))
+    print("💾 Wrote composite → data/processed/aibps_monthly.csv")
     print(f"⏱ Done in {time.time()-start:.1f}s")
 
 if __name__ == "__main__":
