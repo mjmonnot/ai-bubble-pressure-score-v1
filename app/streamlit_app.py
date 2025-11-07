@@ -1,6 +1,6 @@
 # =========================
-# AIBPS COMPOSITE PANEL — SINGLE SOURCE OF TRUTH
-# Paste this block once into app/streamlit_app.py and REMOVE any other "Weights" code.
+# AIBPS COMPOSITE PANEL — SINGLE SOURCE OF TRUTH (vFinal)
+# Paste this into app/streamlit_app.py replacing your entire Composite section.
 # =========================
 import numpy as np
 import pandas as pd
@@ -8,9 +8,9 @@ import altair as alt
 import os, time
 import streamlit as st
 
-# ---- Load processed composite once (use existing df if already loaded above) ----
+# ---- Load processed composite (only once) ----
 try:
-    df  # type: ignore # if df already exists, keep it
+    df  # if already loaded, reuse
 except NameError:
     PROC_PATH = os.path.join("data", "processed", "aibps_monthly.csv")
     if not os.path.exists(PROC_PATH):
@@ -18,15 +18,15 @@ except NameError:
         st.stop()
     df = pd.read_csv(PROC_PATH, index_col=0, parse_dates=True)
 
-# ---- Pillars present & single weights section (keep only this) ----
+# ---- Identify pillars & define single weights section ----
 DESIRED = ["Market", "Capex_Supply", "Infra", "Adoption", "Credit"]
 present_pillars = [p for p in DESIRED if p in df.columns]
 
 if not present_pillars:
-    st.error("No pillar columns found in processed data. Check your workflow outputs.")
+    st.error("No pillar columns found in processed data. Check workflow outputs.")
     st.stop()
 
-st.sidebar.subheader("Weights")  # ← the ONLY weights UI in the entire app
+st.sidebar.subheader("Weights")
 default_w = {"Market":0.25,"Capex_Supply":0.25,"Infra":0.20,"Adoption":0.15,"Credit":0.15}
 w_controls = [
     st.sidebar.slider(p, 0.0, 1.0, float(default_w.get(p, 0.2)), 0.05)
@@ -35,12 +35,13 @@ w_controls = [
 weights = np.array(w_controls, dtype=float)
 weights = np.ones_like(weights) if weights.sum() == 0 else weights / weights.sum()
 
-# ---- Compute custom composite & 3Q rolling average ----
+# ---- Compute custom composite (aligned weights fix) ----
 df = df.sort_index()
-df["AIBPS_custom"] = (df[present_pillars] * weights).sum(axis=1)
+w_series = pd.Series(weights, index=present_pillars)  # <-- alignment fix
+df["AIBPS_custom"] = df[present_pillars].mul(w_series, axis=1).sum(axis=1)
 df["AIBPS_RA"] = df["AIBPS_custom"].rolling(3, min_periods=1).mean()
 
-# ---- Provenance (optional but helpful) ----
+# ---- Provenance caption ----
 try:
     mtime = os.path.getmtime(os.path.join("data","processed","aibps_monthly.csv"))
     st.caption(f"Data last updated (UTC): {time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(mtime))} | "
@@ -48,8 +49,13 @@ try:
 except Exception:
     pass
 
-# ---- Composite chart (bands fixed: green→yellow→orange→red, horizontal legend) ----
+# ---- Optional debug expander ----
+with st.expander("Debug: last 5 rows"):
+    st.write(df[present_pillars + ["AIBPS_custom","AIBPS_RA"]].tail())
+
+# ---- Composite chart ----
 st.subheader("Composite (3-quarter rolling average)")
+
 df_plot = df.reset_index().rename(columns={df.index.name or "index": "Date"})
 df_plot["Date"] = pd.to_datetime(df_plot["Date"])
 df_plot = df_plot[["Date", "AIBPS_RA"]].dropna()
@@ -67,7 +73,7 @@ else:
     start_date = df_plot["Date"].min()
     end_date   = df_plot["Date"].max()
 
-    # Badge that matches zone color
+    # ---- Dynamic badge ----
     latest_val = float(df_plot["AIBPS_RA"].iloc[-1])
     def _zone(x):
         if x < 50: return "Watch (<50)", "#b7e3b1"
@@ -83,9 +89,10 @@ else:
         unsafe_allow_html=True
     )
 
+    # ---- Chart layers ----
     layers = []
 
-    # 1) Optional risk bands (draw first so they stay behind)
+    # Bands (green→yellow→orange→red)
     if show_bands:
         bands_df = pd.DataFrame([
             {"label":"Critical (>85)",   "y_start":85, "y_end":100, "start":start_date, "end":end_date},
@@ -106,18 +113,15 @@ else:
                         range=["#b7e3b1","#fde28a","#f7b267","#f08080"]
                     ),
                     legend=alt.Legend(
-                        title="Risk Zone",
-                        orient="bottom",
-                        direction="horizontal",
-                        symbolSize=120,
-                        titleAnchor="middle"
+                        title="Risk Zone", orient="bottom", direction="horizontal",
+                        symbolSize=120, titleAnchor="middle"
                     )
                 )
             )
         )
         layers.append(bands)
 
-    # 2) Main line (always)
+    # Main line
     line = (
         alt.Chart(df_plot)
         .mark_line(point=False, strokeWidth=2, color="#e07b39")
@@ -128,28 +132,27 @@ else:
             tooltip=[
                 alt.Tooltip("Date:T", title="Date"),
                 alt.Tooltip("AIBPS_RA:Q", title="AIBPS (3Q RA)", format=".1f")
-            ],
+            ]
         )
     )
     layers.append(line)
 
-    # 3) Optional points
+    # Optional points
     if show_points:
         points = (
             alt.Chart(df_plot)
             .mark_circle(size=28, color="#e07b39", opacity=0.85)
             .encode(
-                x="Date:T",
-                y="AIBPS_RA:Q",
+                x="Date:T", y="AIBPS_RA:Q",
                 tooltip=[
                     alt.Tooltip("Date:T", title="Date"),
                     alt.Tooltip("AIBPS_RA:Q", title="AIBPS (3Q RA)", format=".1f")
-                ],
+                ]
             )
         )
         layers.append(points)
 
-    # 4) Optional threshold rules
+    # Optional threshold rules
     if show_rules:
         rules_df = pd.DataFrame({"y": [50, 70, 85]})
         rules = alt.Chart(rules_df).mark_rule(strokeDash=[4, 4], color="gray").encode(y="y:Q")
