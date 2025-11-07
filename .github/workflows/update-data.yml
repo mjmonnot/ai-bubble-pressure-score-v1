@@ -2,11 +2,11 @@ name: Update data and compute AIBPS
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # every 6 hours (UTC). Tweak as needed.
-  workflow_dispatch:         # allow manual runs from the Actions tab
+    - cron: "0 */6 * * *"   # every 6 hours (UTC)
+  workflow_dispatch:
 
 permissions:
-  contents: write            # needed to push updated CSVs back to the repo
+  contents: write
 
 jobs:
   build:
@@ -18,6 +18,9 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,31 +33,57 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ---- Fetch raw data (uses your existing scripts) ----
-- name: Show current fetch_market.py (first 40 lines)
-  run: |
-    echo "===== Showing current file content ====="
-    head -n 40 src/aibps/fetch_market.py || true
-    echo "========================================"
-    python src/aibps/fetch_market.py
+      # ---------- Pre-run print to verify the file the runner sees ----------
+      - name: Show current fetch_market.py (first 60 lines)
+        run: |
+          echo "===== Showing current file content: src/aibps/fetch_market.py ====="
+          if [ -f src/aibps/fetch_market.py ]; then
+            sed -n '1,60p' src/aibps/fetch_market.py
+          else
+            echo "File not found!"
+          fi
+          echo "==================================================================="
 
+      - name: Fetch market proxies (yfinance)
+        run: |
+          python src/aibps/fetch_market.py
+
+      - name: Show current fetch_credit.py (first 60 lines)
+        run: |
+          echo "===== Showing current file content: src/aibps/fetch_credit.py ====="
+          if [ -f src/aibps/fetch_credit.py ]; then
+            sed -n '1,60p' src/aibps/fetch_credit.py
+          else
+            echo "File not found!"
+          fi
+          echo "==================================================================="
 
       - name: Fetch credit (FRED)
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
-          # fetch_credit.py reads FRED_API_KEY from env; skips if not set
           python src/aibps/fetch_credit.py
 
-      # ---- Compute pillars & composite (writes to data/processed/) ----
       - name: Compute AIBPS
-        run: python src/aibps/compute.py
+        run: |
+          python src/aibps/compute.py
 
-      # ---- Commit CSV updates if anything changed ----
+      # ---------- Rebase-aware commit & push to avoid non-fast-forward ----------
       - name: Commit processed files
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git add data/raw/*.csv data/processed/*.csv || true
-          git diff --cached --quiet && echo "No data changes to commit." || git commit -m "Auto-update data ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"
-          git push
+
+          # If nothing staged, exit early
+          if git diff --cached --quiet; then
+            echo "No data changes to commit."
+            exit 0
+          fi
+
+          git fetch origin main
+          git pull --rebase origin main || true
+
+          git commit -m "Auto-update data ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))" || true
+          git push origin HEAD:main
