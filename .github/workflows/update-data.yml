@@ -71,19 +71,6 @@ jobs:
           fi
 
       # ----- COMPUTE -----
-            - name: Fetch Capex (manual CSV)
-        run: |
-          python src/aibps/fetch_capex.py
-
-      - name: Sanity print capex tail
-        run: |
-          echo "---- TAIL: data/processed/capex_processed.csv ----"
-          if [ -f data/processed/capex_processed.csv ]; then
-            tail -n 10 data/processed/capex_processed.csv
-          else
-            echo "capex_processed.csv missing"
-          fi
-      
       - name: Compute AIBPS
         run: |
           python src/aibps/compute.py
@@ -97,13 +84,36 @@ jobs:
             echo "aibps_monthly.csv missing"
           fi
 
+      # ----- BUILD METADATA -----
+      - name: Write build metadata
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          python - << 'PY'
+          import os, json, time
+          meta = {
+            "updated_at_utc": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            "github_run_id": os.environ.get('GITHUB_RUN_ID'),
+            "github_run_number": os.environ.get('GITHUB_RUN_NUMBER'),
+            "github_sha": os.environ.get('GITHUB_SHA'),
+            "github_ref": os.environ.get('GITHUB_REF'),
+          }
+          os.makedirs('data/processed', exist_ok=True)
+          with open('data/processed/metadata.json','w') as f:
+              json.dump(meta, f, indent=2)
+          print(json.dumps(meta, indent=2))
+          PY
+
       # ----- COMMIT & PUSH -----
       - name: Commit processed files
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add data/raw/*.csv data/processed/*.csv || true
+          git add data/raw/*.csv data/processed/*.csv data/processed/metadata.json || true
 
           if git diff --cached --quiet; then
             echo "No data changes to commit."
