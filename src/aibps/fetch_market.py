@@ -16,7 +16,7 @@ def download_live():
             if df is None or df.empty or "Close" not in df:
                 print(f"⚠️ empty for {t}; skipping"); continue
             s = df["Close"]; s.index = pd.to_datetime(s.index); s.index.name = "Date"
-            frames.append(s.to_frame(name=t))  # ← SAFE naming
+            frames.append(s.to_frame(name=t))  # ← SAFE naming (no .rename)
         if not frames: return None
         out = pd.concat(frames, axis=1); out.index.name = "Date"; return out
     except Exception as e:
