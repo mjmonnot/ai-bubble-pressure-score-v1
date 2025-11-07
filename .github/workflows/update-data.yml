@@ -1,0 +1,55 @@
+name: Update data and compute AIBPS
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours (UTC). Tweak as needed.
+  workflow_dispatch:         # allow manual runs from the Actions tab
+
+permissions:
+  contents: write            # needed to push updated CSVs back to the repo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: aibps-update
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ---- Fetch raw data (uses your existing scripts) ----
+      - name: Fetch market proxies (yfinance)
+        run: python src/aibps/fetch_market.py
+
+      - name: Fetch credit (FRED)
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          # fetch_credit.py reads FRED_API_KEY from env; skips if not set
+          python src/aibps/fetch_credit.py
+
+      # ---- Compute pillars & composite (writes to data/processed/) ----
+      - name: Compute AIBPS
+        run: python src/aibps/compute.py
+
+      # ---- Commit CSV updates if anything changed ----
+      - name: Commit processed files
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/raw/*.csv data/processed/*.csv || true
+          git diff --cached --quiet && echo "No data changes to commit." || git commit -m "Auto-update data ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"
+          git push
