@@ -30,6 +30,37 @@ if not os.path.exists(PROC_PATH):
 
 df = pd.read_csv(PROC_PATH, index_col=0, parse_dates=True).sort_index()
 
+# ---- GitHub Action metadata chip (reads data/processed/metadata.json) ----
+import json
+
+META_PATH = os.path.join("data", "processed", "metadata.json")
+def gh_meta_badge(path: str):
+    try:
+        with open(path, "r") as f:
+            meta = json.load(f)
+    except Exception:
+        st.info("Build metadata not available yet.")
+        return
+
+    run_num = meta.get("github_run_number")
+    sha = (meta.get("github_sha") or "")[:7]
+    updated = meta.get("updated_at_utc")
+    ref = meta.get("github_ref") or ""
+
+    # Small pill with a monospace SHA
+    st.markdown(
+        f"""<div style="display:inline-block;padding:6px 10px;border-radius:10px;
+                        background:#eef2ff;color:#222;font-weight:600;margin:4px 8px 10px 0;">
+               Build: #{run_num} • <span style="font-family:Menlo,Consolas,monospace;">{sha}</span>
+               <span style="font-weight:400;">@ {ref}</span>
+               <span style="font-weight:400;">• {updated}</span>
+            </div>""",
+        unsafe_allow_html=True
+    )
+
+gh_meta_badge(META_PATH)
+
+
 # ---------- Data Freshness badge (NEW) ----------
 import time
 
