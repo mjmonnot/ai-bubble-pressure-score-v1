@@ -16,17 +16,26 @@ SAMPLE_FILE = os.path.join("data", "sample", "market_prices_sample.csv")  # opti
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(PRO_DIR, exist_ok=True)
 
-def download_live(start="2015-01-01"):
+START = "2015-01-01"
+TICKERS = ["SOXX", "QQQ"]
+
+def download_live(start=START):
     try:
         import yfinance as yf
-        tickers = ["SOXX", "QQQ"]
-        data = {}
-        for t in tickers:
-            s = yf.download(t, start=start, auto_adjust=True, progress=False)["Close"].rename(t).to_frame()
-            data[t] = s
-        df = pd.concat(data.values(), axis=1)
-        df.index.name = "Date"
-        return df
+        frames = []
+        for t in TICKERS:
+            df = yf.download(t, start=start, auto_adjust=True, progress=False)
+            if df is None or df.empty or "Close" not in df:
+                print(f"⚠️ yfinance returned empty for {t}; skipping.")
+                continue
+            s = df["Close"].rename_axis("Date").to_frame(name=t)  # <-- key fix
+            frames.append(s)
+        if not frames:
+            return None
+        out = pd.concat(frames, axis=1)
+        out.index = pd.to_datetime(out.index)
+        out.index.name = "Date"
+        return out
     except Exception as e:
         print(f"⚠️ yfinance fetch failed: {e}")
         return None
@@ -50,6 +59,7 @@ def pct_rank(s, invert=False):
 
 def main():
     start = time.time()
+
     df = download_live()
     if df is None or df.empty:
         df = load_sample_or_generate()
@@ -58,10 +68,13 @@ def main():
     df.to_csv(raw_path)
     print(f"💾 Saved raw market data → {raw_path}")
 
-    # Simple proxies: 1y returns (annualized) → percentile
+    # Simple proxies: 1y returns (approx 252 trading days) → percentile
     m = df.copy()
-    m["SOXX_ret_1y"] = m["SOXX"].pct_change(252) * 100
-    m["QQQ_ret_1y"]  = m["QQQ"].pct_change(252)  * 100
+    # If daily, use 252; if monthly, fallback to 12
+    periods = 252 if m.index.inferred_type in ("datetime64", "datetime64tz") and m.index.freq is None else 12
+    m["SOXX_ret_1y"] = m["SOXX"].pct_change(periods) * 100
+    m["QQQ_ret_1y"]  = m["QQQ"].pct_change(periods)  * 100
+
     out = pd.DataFrame({
         "MKT_SOXX_1y_pct": pct_rank(m["SOXX_ret_1y"]),
         "MKT_QQQ_1y_pct":  pct_rank(m["QQQ_ret_1y"]),
