@@ -14,6 +14,7 @@ This repository powers the **AI Bubble Pressure Score (AIBPS)** — a 0–100 co
 
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://aibps-v0-1.streamlit.app)
+![Update data and compute AIBPS](https://github.com/mjmonnot/aibps-v0-1/actions/workflows/update-data.yml/badge.svg)
 
 
 ---
