@@ -28,12 +28,15 @@ def download_live(start=START):
             if df is None or df.empty or "Close" not in df:
                 print(f"⚠️ yfinance returned empty for {t}; skipping.")
                 continue
-            s = df["Close"].rename_axis("Date").to_frame(name=t)  # <-- key fix
-            frames.append(s)
+            # Avoid .rename completely; construct a new DataFrame with explicit name
+            s = df["Close"]
+            s.index = pd.to_datetime(s.index)
+            s.index.name = "Date"
+            one = pd.DataFrame({t: s.values}, index=s.index)
+            frames.append(one)
         if not frames:
             return None
         out = pd.concat(frames, axis=1)
-        out.index = pd.to_datetime(out.index)
         out.index.name = "Date"
         return out
     except Exception as e:
@@ -58,6 +61,7 @@ def pct_rank(s, invert=False):
     return 100 - r if invert else r
 
 def main():
+    print(f"pandas version: {pd.__version__}")
     start = time.time()
 
     df = download_live()
@@ -68,10 +72,9 @@ def main():
     df.to_csv(raw_path)
     print(f"💾 Saved raw market data → {raw_path}")
 
-    # Simple proxies: 1y returns (approx 252 trading days) → percentile
+    # Simple proxies: ~1y returns (252 trading days if daily; else 12 periods)
     m = df.copy()
-    # If daily, use 252; if monthly, fallback to 12
-    periods = 252 if m.index.inferred_type in ("datetime64", "datetime64tz") and m.index.freq is None else 12
+    periods = 252 if (m.index.dtype.kind == "M" and m.index.freq is None) else 12
     m["SOXX_ret_1y"] = m["SOXX"].pct_change(periods) * 100
     m["QQQ_ret_1y"]  = m["QQQ"].pct_change(periods)  * 100
 
