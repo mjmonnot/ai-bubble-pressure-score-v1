@@ -69,6 +69,19 @@ jobs:
           else
             echo "credit_fred_processed.csv missing"
           fi
+         # ----- Capex ----- 
+- name: Fetch Capex (manual CSV)
+  run: |
+    python src/aibps/fetch_capex.py
+
+- name: Sanity print capex tail
+  run: |
+    echo "---- TAIL: data/processed/capex_processed.csv ----"
+    if [ -f data/processed/capex_processed.csv ]; then
+      tail -n 10 data/processed/capex_processed.csv
+    else
+      echo "capex_processed.csv missing"
+    fi
 
       # ----- COMPUTE -----
       - name: Compute AIBPS
