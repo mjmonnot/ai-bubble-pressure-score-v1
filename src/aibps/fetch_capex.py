@@ -1,6 +1,9 @@
 # src/aibps/fetch_capex.py
-# Capex_Supply pillar with flexible percentile for short histories.
-# Works even if you only have a few quarterly rows.
+# Capex_Supply pillar:
+# - accepts sparse quarterly points in data/raw/capex_manual.csv
+# - flexible percentile (expanding for short histories, rolling for longer)
+# - reindex to full month-end grid through "today" and forward-fill
+# - writes data/processed/capex_processed.csv with a non-NaN tail
 
 import os, sys, time
 import pandas as pd
@@ -11,27 +14,20 @@ OUT = os.path.join("data","processed","capex_processed.csv")
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
 def _expanding_pct(series: pd.Series) -> pd.Series:
-    # Expanding percentile of the LAST value in the window
     out = []
     vals = series.values
     for i in range(len(vals)):
-        s = pd.Series(vals[: i+1])
+        s = pd.Series(vals[:i+1])
         out.append(float(s.rank(pct=True).iloc[-1] * 100.0))
     return pd.Series(out, index=series.index)
 
 def rolling_pct_rank_flexible(series: pd.Series, window: int = 120) -> pd.Series:
-    """
-    If history is short, use expanding percentile (needs >=3 pts to be meaningful).
-    Once we have >= min_periods, switch to rolling window.
-    """
     series = series.dropna()
     n = len(series)
     if n == 0:
         return series
-    # For sparse series, ensure we emit something instead of all-NaN:
     if n < 24:
         return _expanding_pct(series)
-    # Normal path: rolling 10y percentile with reasonable min_periods
     def _rank_last(x):
         s = pd.Series(x)
         return float(s.rank(pct=True).iloc[-1] * 100.0)
@@ -41,15 +37,17 @@ def rolling_pct_rank_flexible(series: pd.Series, window: int = 120) -> pd.Series
 def main():
     t0 = time.time()
     if not os.path.exists(RAW):
-        print(f"ℹ️ {RAW} not found. Writing placeholder header so pipeline stays green.")
+        print(f"ℹ️ {RAW} not found. Writing header only.")
         pd.DataFrame(columns=["Capex_Supply"]).to_csv(OUT)
         return
 
     df = pd.read_csv(RAW)
-    # Expect columns: date,company,metric,value,unit,notes  (extra cols allowed)
-    if "date" not in df.columns or "value" not in df.columns:
-        raise ValueError("capex_manual.csv must include at least 'date' and 'value' columns.")
 
+    # Require at least date + value; extra columns are fine
+    if "date" not in df.columns or "value" not in df.columns:
+        raise ValueError("capex_manual.csv must include 'date' and 'value' columns.")
+
+    # Parse and clean
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df[~df["date"].isna()].copy()
     df["date"] = df["date"].dt.to_period("M").dt.to_timestamp("M")
@@ -58,12 +56,21 @@ def main():
     df = df[~df["value"].isna()].copy()
 
     # Monthly aggregate across companies/metrics
-    monthly = df.groupby("date")["value"].sum().sort_index()
+    monthly_sum = df.groupby("date")["value"].sum().sort_index()  # sparse monthly (quarterly-like)
 
-    # Flexible percentile (emits values even with sparse quarterly data)
-    capex_pct = rolling_pct_rank_flexible(monthly, window=120)
+    # Percentile (0–100): flexible to handle short history
+    capex_pct = rolling_pct_rank_flexible(monthly_sum, window=120)
+
+    # Build a full month-end index through current month and forward-fill
+    if not capex_pct.empty:
+        start = capex_pct.index.min().to_period("M").to_timestamp("M")
+        end   = pd.Timestamp.today().to_period("M").to_timestamp("M")
+        full_idx = pd.period_range(start, end, freq="M").to_timestamp("M")
+        capex_pct = capex_pct.reindex(full_idx).ffill()
+        capex_pct.index.name = "date"
 
     out = pd.DataFrame({"Capex_Supply": capex_pct}).dropna(how="all")
+
     out.to_csv(OUT)
     print(f"💾 Wrote {OUT} ({len(out)} rows)")
     print("Tail:")
