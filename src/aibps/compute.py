@@ -50,6 +50,7 @@ def keep_one(df: pd.DataFrame | None, name: str) -> pd.DataFrame | None:
 # ... keep existing imports and helpers ...
 
 def main():
+    t0 = time.time()
     # ... existing reads ...
     mkt  = read_proc("market_processed.csv")
     crd  = read_proc("credit_fred_processed.csv")
