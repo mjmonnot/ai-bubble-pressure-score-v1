@@ -30,66 +30,10 @@ if not os.path.exists(PROC_PATH):
 
 df = pd.read_csv(PROC_PATH, index_col=0, parse_dates=True).sort_index()
 
-# ---- GitHub Action metadata chip (reads data/processed/metadata.json) ----
-import json
-
-META_PATH = os.path.join("data", "processed", "metadata.json")
-def gh_meta_badge(path: str):
-    try:
-        with open(path, "r") as f:
-            meta = json.load(f)
-    except Exception:
-        st.info("Build metadata not available yet.")
-        return
-
-    run_num = meta.get("github_run_number")
-    sha = (meta.get("github_sha") or "")[:7]
-    updated = meta.get("updated_at_utc")
-    ref = meta.get("github_ref") or ""
-
-    # Small pill with a monospace SHA
-    st.markdown(
-        f"""<div style="display:inline-block;padding:6px 10px;border-radius:10px;
-                        background:#eef2ff;color:#222;font-weight:600;margin:4px 8px 10px 0;">
-               Build: #{run_num} • <span style="font-family:Menlo,Consolas,monospace;">{sha}</span>
-               <span style="font-weight:400;">@ {ref}</span>
-               <span style="font-weight:400;">• {updated}</span>
-            </div>""",
-        unsafe_allow_html=True
-    )
-
-gh_meta_badge(META_PATH)
-
-
-# ---------- Data Freshness badge (NEW) ----------
-import time
-
-def freshness_badge(path: str):
-    try:
-        mtime = os.path.getmtime(path)
-    except Exception:
-        st.warning("Freshness: unknown (file not found)")
-        return
-    age_hours = (time.time() - mtime) / 3600.0
-
-    if age_hours < 6:
-        label, color = f"Fresh • {age_hours:.1f}h ago", "#b7e3b1"   # green
-    elif age_hours < 24:
-        label, color = f"OK • {age_hours:.1f}h ago", "#fde28a"      # yellow
-    elif age_hours < 72:
-        label, color = f"Stale • {age_hours:.1f}h ago", "#f7b267"   # orange
-    else:
-        label, color = f"Stale • {age_hours/24:.1f}d ago", "#f08080" # red
-
-    st.markdown(
-        f"""<div style="display:inline-block;padding:8px 12px;border-radius:12px;
-                        background:{color};color:#222;font-weight:600;margin:6px 0;">
-               Data freshness: {label}
-            </div>""",
-        unsafe_allow_html=True
-    )
-
-freshness_badge(PROC_PATH)
+# ---- Sidebar status panel (replaces any top-of-page badges) ----
+with st.sidebar.expander("Dataset status", expanded=False):
+    freshness_badge(PROC_PATH)
+    gh_meta_badge(META_PATH)  # clickable build badge (link to Actions run)
 
 
 # ---------- Identify pillars present ----------
