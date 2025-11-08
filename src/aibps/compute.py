@@ -21,6 +21,9 @@ def read_proc(filename: str) -> pd.DataFrame | None:
         return None
     try:
         df = pd.read_csv(path, index_col=0, parse_dates=True)
+        if df.empty or df.dropna(how="all").empty:
+            print(f"ℹ️ {filename} is empty or all-NaN; ignoring.")
+            return None
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index, errors="coerce")
         df = df[~df.index.isna()].sort_index()
