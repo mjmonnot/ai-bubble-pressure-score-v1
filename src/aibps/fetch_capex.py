@@ -50,14 +50,15 @@ def main():
 
     capex_pct = rolling_pct_rank_flexible(monthly_sum, window=120)
 
-    # Reindex to full month grid through today; forward-fill only a quarter
+       # Reindex to full month grid through today; forward-fill only up to 12 months
     if not capex_pct.empty:
         start = capex_pct.index.min().to_period("M").to_timestamp("M")
         end   = pd.Timestamp.today().to_period("M").to_timestamp("M")
         full_idx = pd.period_range(start, end, freq="M").to_timestamp("M")
-        capex_pct = capex_pct.reindex(full_idx).ffill(limit=3)
+        capex_pct = capex_pct.reindex(full_idx).ffill(limit=12)  # was limit=3 before
         capex_pct = capex_pct.clip(1, 99)
         capex_pct.index.name = "date"
+
 
     out = pd.DataFrame({"Capex_Supply": capex_pct}).dropna(how="all")
     out.to_csv(OUT)
