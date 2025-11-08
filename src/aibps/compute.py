@@ -112,9 +112,37 @@ def main():
         cap_full = pd.concat(cap_cols, axis=1)
         pieces.append(cap_full)
 
-    # ---- Optional Infra & Adoption pillars ----
+# ---- Infra pillar ----
+    infraM = read_proc("infra_macro_processed.csv")
+   
+# ---- Infra components & blended pillar ----
+    infra_sources = []
+    infra_manual = None
+    infra_macro  = None
+
     if infra is not None and "Infra" in infra.columns:
-        pieces.append(infra[["Infra"]])
+        infra_manual = infra["Infra"].rename("Infra_Manual")
+        infra_sources.append(infra_manual.rename("Infra"))
+
+    if infraM is not None and "Infra_Macro" in infraM.columns:
+        infra_macro = infraM["Infra_Macro"].rename("Infra_Macro")
+        infra_sources.append(infra_macro.rename("Infra"))
+
+    if infra_sources:
+        infra_blend = (
+            pd.concat(infra_sources, axis=1)
+            .mean(axis=1, skipna=True)
+            .to_frame("Infra")
+        )
+        infra_cols = [infra_blend]
+        if infra_manual is not None:
+            infra_cols.append(infra_manual.to_frame())
+        if infra_macro is not None:
+            infra_cols.append(infra_macro.to_frame())
+        infra_full = pd.concat(infra_cols, axis=1)
+        pieces.append(infra_full)
+
+        
     if adop is not None and "Adoption" in adop.columns:
         pieces.append(adop[["Adoption"]])
 
