@@ -69,6 +69,7 @@ def main():
     capM  = read_proc("macro_capex_processed.csv")    # macro FRED
     infra = read_proc("infra_processed.csv")
     adop  = read_proc("adoption_processed.csv")
+    sent  = read_proc("sentiment_processed.csv")
 
     pieces = []
 
