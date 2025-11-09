@@ -1,344 +1,359 @@
-# ============================================================
-# AIBPS — Streamlit App Header (drop-in)
-# - imports + page config
-# - load processed data (df)
-# - define freshness_badge() and gh_meta_badge()
-# - show them in a sidebar expander (not on main page)
-# Paste this at the TOP of app/streamlit_app.py
-# ============================================================
-import os, time, json
+import os
+import time
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import altair as alt
 import streamlit as st
 
-# ---------- Page config ----------
-st.set_page_config(
-    page_title="AI Bubble Pressure Score (AIBPS)",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 # ---------- Paths ----------
 PROC_PATH = os.path.join("data", "processed", "aibps_monthly.csv")
-META_PATH = os.path.join("data", "processed", "metadata.json")
+META_PATH = os.path.join("data", "processed", "aibps_meta.yaml")
 
-# ---------- Load processed composite ----------
+
+# ---------- Helper: dataset freshness & meta ----------
+def freshness_badge(path: str):
+    """Show last composite date + how stale it is."""
+    st.markdown("**Composite data freshness**")
+    if not os.path.exists(path):
+        st.info("No composite file found yet.")
+        return
+
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True).sort_index()
+        if df.empty:
+            st.warning("Composite exists but is empty.")
+            return
+        last_date = df.index.max()
+        days_old = (pd.Timestamp.today().normalize() - last_date.normalize()).days
+        st.write(f"Last composite point: `{last_date.date()}`  (≈ {days_old} days ago)")
+    except Exception as e:
+        st.error(f"Error reading composite for freshness: {e}")
+
+
+def gh_meta_badge(path: str):
+    """Very light meta badge placeholder."""
+    st.markdown("**Build meta**")
+    if not os.path.exists(path):
+        st.write("No meta file found yet.")
+        return
+    try:
+        import yaml
+
+        with open(path, "r") as f:
+            meta = yaml.safe_load(f) or {}
+        build = meta.get("build_id", "n/a")
+        ts = meta.get("timestamp", "n/a")
+        st.write(f"Build: `{build}`  •  Timestamp: `{ts}`")
+    except Exception as e:
+        st.write(f"Meta read error: {e}")
+
+
+# ---------- Load composite ----------
+st.set_page_config(page_title="AI Bubble Pressure Score", layout="wide")
+
+st.title("AI Bubble Pressure Score (AIBPS)")
+st.caption("Composite view of AI-related market, credit, capex, infra, adoption, and sentiment conditions.")
+
 if not os.path.exists(PROC_PATH):
-    st.error("Processed file not found: data/processed/aibps_monthly.csv")
+    st.error(f"Composite file not found at `{PROC_PATH}`. Run the GitHub Action first.")
     st.stop()
 
 df = pd.read_csv(PROC_PATH, index_col=0, parse_dates=True).sort_index()
+if df.empty:
+    st.error("Composite file is empty. Check workflows / processed inputs.")
+    st.stop()
 
-# ---------- Badges (functions defined BEFORE any calls) ----------
-def freshness_badge(path: str):
-    """Small colored chip indicating how recently the processed CSV was updated."""
-    try:
-        mtime = os.path.getmtime(path)
-    except Exception:
-        st.warning("Freshness: unknown (file not found)")
-        return
-    age_hours = (time.time() - mtime) / 3600.0
+# All potential pillars
+PILLAR_DESIRED = ["Market", "Capex_Supply", "Infra", "Adoption", "Sentiment", "Credit"]
+present_pillars = [p for p in PILLAR_DESIRED if p in df.columns]
 
-    if age_hours < 6:
-        label, color = f"Fresh • {age_hours:.1f}h ago", "#b7e3b1"   # green
-    elif age_hours < 24:
-        label, color = f"OK • {age_hours:.1f}h ago", "#fde28a"      # yellow
-    elif age_hours < 72:
-        label, color = f"Stale • {age_hours:.1f}h ago", "#f7b267"   # orange
-    else:
-        label, color = f"Stale • {age_hours/24:.1f}d ago", "#f08080" # red
 
-    st.markdown(
-        f"""<div style="display:inline-block;padding:8px 12px;border-radius:12px;
-                        background:{color};color:#222;font-weight:600;margin:2px 0;">
-               Data freshness: {label}
-            </div>""",
-        unsafe_allow_html=True
-    )
-
-def gh_meta_badge(path: str):
-    """Clickable badge showing last GitHub Actions run (if metadata.json exists)."""
-    try:
-        with open(path, "r") as f:
-            meta = json.load(f)
-    except Exception:
-        st.info("Build metadata not available yet.")
-        return
-
-    run_num = meta.get("github_run_number")
-    sha = (meta.get("github_sha") or "")[:7]
-    ref = meta.get("github_ref") or ""        # expect 'main'
-    updated = meta.get("updated_at_utc") or ""
-    run_url = meta.get("github_run_url")
-
-    html = f"""<div style="display:inline-block;padding:6px 10px;border-radius:10px;
-                         background:#eef2ff;color:#222;font-weight:600;margin:2px 0;">
-                 Build: #{run_num} • <span style="font-family:Menlo,Consolas,monospace;">{sha}</span>
-                 <span style="font-weight:400;">@ {ref}</span>
-                 <span style="font-weight:400;">• {updated}</span>
-               </div>"""
-    if run_url:
-        html = f'<a href="{run_url}" target="_blank" style="text-decoration:none;">{html}</a>'
-    st.markdown(html, unsafe_allow_html=True)
-
-# ---------- SIDEBAR: Dataset + Capex status ----------
+# ---------- Sidebar: status + pillar weights + mini-charts ----------
 with st.sidebar.expander("Dataset & build status", expanded=False):
     freshness_badge(PROC_PATH)
     gh_meta_badge(META_PATH)
 
-with st.sidebar.expander("Capex breakdown (macro vs manual)", expanded=True):
-    cap_cols = [c for c in ["Capex_Supply", "Capex_Supply_Manual", "Capex_Supply_Macro"] if c in df.columns]
-    if not cap_cols:
-        st.write("No Capex series available yet.")
+st.sidebar.markdown("## Pillar weights")
+
+# Default weights (these will be renormalized)
+default_weights = {
+    "Market": 0.25,
+    "Capex_Supply": 0.20,
+    "Infra": 0.15,
+    "Adoption": 0.15,
+    "Sentiment": 0.10,
+    "Credit": 0.15,
+}
+
+# Group headings
+groups = {
+    "Financial": ["Market", "Credit"],
+    "Real Economy": ["Capex_Supply", "Infra"],
+    "Diffusion / Psychology": ["Adoption", "Sentiment"],
+}
+
+weight_inputs = {}
+
+for group_name, group_pillars in groups.items():
+    # Show group only if at least one pillar is present
+    group_present = [p for p in group_pillars if p in present_pillars]
+    if not group_present:
+        continue
+
+    st.sidebar.markdown(f"### {group_name}")
+    for p in group_present:
+        default_val = default_weights.get(p, 0.1)
+        weight_inputs[p] = st.sidebar.slider(
+            p,
+            min_value=0.0,
+            max_value=1.0,
+            value=float(default_val),
+            step=0.01,
+        )
+
+# Normalize weights across all present pillars
+if present_pillars:
+    w_raw = np.array([weight_inputs.get(p, default_weights.get(p, 0.1)) for p in present_pillars], dtype=float)
+    if w_raw.sum() == 0:
+        w_norm = np.ones(len(present_pillars)) / len(present_pillars)
     else:
-        df_cap = df[cap_cols].copy()
+        w_norm = w_raw / w_raw.sum()
+    weight_series = pd.Series(w_norm, index=present_pillars)
+else:
+    weight_series = pd.Series(dtype=float)
 
-        # keep last 5 years so the chart is readable
-        cutoff = df_cap.index.max() - pd.DateOffset(years=5)
-        df_cap = df_cap[df_cap.index >= cutoff]
+st.sidebar.markdown("**Normalized weights**")
+for p in present_pillars:
+    st.sidebar.write(f"{p}: {weight_series[p]:.2f}")
 
-        df_cap = df_cap.reset_index().rename(columns={"index": "date"})
-        long_cap = df_cap.melt(
-            id_vars=["date"],
-            value_vars=cap_cols,
-            var_name="series",
-            value_name="value"
-        ).dropna()
+# ---------- Sidebar mini-charts (sparklines) ----------
+st.sidebar.markdown("---")
+st.sidebar.markdown("## Pillar sparklines (last 5 years)")
 
-        if long_cap.empty:
-            st.write("Capex data present but empty after filtering.")
-        else:
-            cap_chart = (
-                alt.Chart(long_cap)
-                .mark_line()
-                .encode(
-                    x=alt.X("date:T", title="Date"),
-                    y=alt.Y("value:Q", title="Capex percentile (0–100)"),
-                    color=alt.Color("series:N", title="Series"),
-                    tooltip=["date:T", "series:N", "value:Q"]
-                )
-                .properties(height=180)
-            )
-            st.altair_chart(cap_chart, use_container_width=True)
-            st.caption("Capex_Supply = blend of manual & macro where both exist.")
+def mini_chart(col: str, title: str):
+    if col not in df.columns:
+        st.sidebar.write(f"{title}: no data.")
+        return
+    s = df[col].dropna()
+    if s.empty:
+        st.sidebar.write(f"{title}: no data.")
+        return
+    cutoff = s.index.max() - pd.DateOffset(years=5)
+    s = s[s.index >= cutoff]
+    s = s.reset_index().rename(columns={"index": "date"})
+    chart = (
+        alt.Chart(s)
+        .mark_line()
+        .encode(
+            x=alt.X("date:T", title=""),
+            y=alt.Y(f"{col}:Q", title="", scale=alt.Scale(domain=[0, 100])),
+            tooltip=["date:T", alt.Tooltip(f"{col}:Q", title=title)],
+        )
+        .properties(height=80)
+    )
+    st.sidebar.altair_chart(chart, use_container_width=True)
+
+for p in PILLAR_DESIRED:
+    if p in df.columns:
+        mini_chart(p, p)
 
 
-# (Your existing code continues below… e.g., pillar detection, weights UI, charts)
-
-# ---------- Identify pillars present ----------
-DESIRED = ["Market", "Capex_Supply", "Infra", "Adoption", "Sentiment", "Credit"]
-present_pillars = [p for p in DESIRED if p in df.columns]
-
+# ---------- Recompute AIBPS with current slider weights ----------
 if not present_pillars:
-    st.error("No pillar columns found in processed data. Check your workflow outputs.")
+    st.warning("No pillars present in composite. Check your processed inputs.")
     st.stop()
 
-# ---------- Sidebar: Weights (ONLY HERE) ----------
-st.sidebar.title("AIBPS Controls")
-st.sidebar.subheader("Weights")
-default_w = {"Market":0.25,"Capex_Supply":0.25,"Infra":0.20,"Adoption":0.15,"Credit":0.15}
-w_controls = [
-    st.sidebar.slider(p, 0.0, 1.0, float(default_w.get(p, 0.2)), 0.05)
-    for p in present_pillars
-]
-base_w = np.array(w_controls, dtype=float)
-if base_w.sum() == 0:
-    base_w[:] = 1.0  # avoid divide-by-zero; equal weights
-# NOTE: We do per-row renormalization later (robust to NaNs / missing pillars)
+df["AIBPS_dynamic"] = df[present_pillars].mul(weight_series, axis=1).sum(axis=1, skipna=True)
+df["AIBPS_RA_dynamic"] = df["AIBPS_dynamic"].rolling(3, min_periods=1).mean()
 
-# ---------- Compute Composite (Robust Weights) ----------
-vals = df[present_pillars].copy()
+# Choose which composite to display
+composite_choice = st.radio(
+    "Composite to display:",
+    options=["Rolling AIBPS (3m)", "Raw AIBPS"],
+    index=0,
+    horizontal=True,
+)
 
-# Build per-row weight matrix aligned to columns
-w_series = pd.Series(base_w, index=present_pillars)                  # (P,)
-W = pd.DataFrame(np.tile(w_series.values, (len(vals), 1)),           # (N,P)
-                 index=vals.index, columns=present_pillars)
-
-# Zero-out weights where data is missing on that row; renormalize per row
-mask = vals.notna()
-W_eff = W.where(mask, other=0.0)
-row_sums = W_eff.sum(axis=1)
-W_eff_norm = W_eff.div(row_sums.replace(0, np.nan), axis=0)
-
-# Weighted average per row
-df["AIBPS_custom"] = (vals * W_eff_norm).sum(axis=1)
-# 3-quarter rolling average
-df["AIBPS_RA"] = df["AIBPS_custom"].rolling(3, min_periods=1).mean()
-
-# ---------- Provenance ----------
-try:
-    mtime = os.path.getmtime(PROC_PATH)
-    st.caption(
-        f"Data last updated (UTC): {time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(mtime))} | "
-        f"Pillars present: {', '.join(present_pillars)}"
-    )
-except Exception:
-    pass
-
-# ============================================================
-# Composite Chart
-# ============================================================
-st.subheader("Composite (3-quarter rolling average)")
-
-df_plot = df.reset_index().rename(columns={df.index.name or "index": "Date"})
-df_plot["Date"] = pd.to_datetime(df_plot["Date"])
-df_plot = df_plot[["Date", "AIBPS_RA"]].dropna()
-
-if df_plot.empty:
-    st.warning("No composite data available.")
+if composite_choice == "Rolling AIBPS (3m)":
+    comp_col = "AIBPS_RA_dynamic"
 else:
-    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 2.4])
-    with c1: show_bands   = st.checkbox("Show risk bands", value=True)
-    with c2: show_rules   = st.checkbox("Show thresholds", value=True)
-    with c3: show_points  = st.checkbox("Show points", value=True)
-    with c4: band_opacity = st.slider("Band opacity", 0.00, 0.40, 0.18, 0.02)
+    comp_col = "AIBPS_dynamic"
 
-    ymin, ymax = 0, 100
-    start_date = df_plot["Date"].min()
-    end_date   = df_plot["Date"].max()
+# ---------- Regime callout ----------
+if df[comp_col].dropna().empty:
+    st.error("No valid composite values. Check processed pillars.")
+    st.stop()
 
-    # Dynamic badge (color matches zone)
-    latest_val = float(df_plot["AIBPS_RA"].iloc[-1])
-    def _zone(x):
-        if x < 50: return "Watch (<50)", "#b7e3b1"
-        if x < 70: return "Rising (50–70)", "#fde28a"
-        if x < 85: return "Elevated (70–85)", "#f7b267"
-        return "Critical (>85)", "#f08080"
-    z_label, z_color = _zone(latest_val)
-    st.markdown(
-        f"""<div style="display:inline-block;padding:10px 14px;border-radius:12px;
-                        background:{z_color};color:#222;font-weight:600;margin-bottom:6px;">
-                AIBPS (3Q RA): {latest_val:.1f} — {z_label}
-            </div>""",
-        unsafe_allow_html=True
+latest_date = df[comp_col].dropna().index.max()
+latest_val = df.loc[latest_date, comp_col]
+
+def classify_regime(x: float) -> str:
+    if x < 40:
+        return "Calm"
+    elif x < 60:
+        return "Normal-ish"
+    elif x < 80:
+        return "Elevated"
+    else:
+        return "Extreme"
+
+regime = classify_regime(latest_val)
+st.metric(
+    label=f"{comp_col} (latest as of {latest_date.date()})",
+    value=f"{latest_val:.1f}",
+    help=f"Regime: {regime}",
+)
+
+
+# ---------- Main composite chart with bands ----------
+
+# Build long form for pillars + composite
+plot_cols = present_pillars + [comp_col]
+df_plot = df[plot_cols].dropna(how="all").copy()
+df_plot = df_plot.reset_index().rename(columns={"index": "date"})
+
+long_pillars = df_plot.melt(
+    id_vars=["date"],
+    value_vars=present_pillars,
+    var_name="pillar",
+    value_name="value",
+)
+
+comp_df = df_plot[["date", comp_col]].rename(columns={comp_col: "Composite"})
+
+# Bands definition
+bands_df = pd.DataFrame(
+    [
+        {"name": "Calm",       "y0": 0,  "y1": 40, "color": "#e0f7e9"},
+        {"name": "Normal-ish","y0": 40, "y1": 60, "color": "#fff9c4"},
+        {"name": "Elevated",   "y0": 60, "y1": 80, "color": "#ffe0b2"},
+        {"name": "Extreme",    "y0": 80, "y1": 100,"color": "#ffcccb"},
+    ]
+)
+
+# Bands chart
+bands_chart = (
+    alt.Chart(bands_df)
+    .mark_rect()
+    .encode(
+        x=alt.value(0),  # stretch over full x domain via transform
+        x2=alt.value(1),
+        y="y0:Q",
+        y2="y1:Q",
+        color=alt.Color("name:N", scale=alt.Scale(domain=[], range=[]), legend=None),
     )
+    .transform_calculate(dummy="0")
+)
 
-    layers = []
-
-    # 1) Risk bands (green→yellow→orange→red), legend horizontal at bottom
-    if show_bands:
-        bands_df = pd.DataFrame([
-            {"label":"Critical (>85)",   "y_start":85, "y_end":100, "start":start_date, "end":end_date},
-            {"label":"Elevated (70–85)", "y_start":70, "y_end":85,  "start":start_date, "end":end_date},
-            {"label":"Rising (50–70)",   "y_start":50, "y_end":70,  "start":start_date, "end":end_date},
-            {"label":"Watch (<50)",      "y_start":0,  "y_end":50,  "start":start_date, "end":end_date},
-        ])
-        bands = (
-            alt.Chart(bands_df)
-            .mark_rect(opacity=float(band_opacity))
-            .encode(
-                x="start:T", x2="end:T",
-                y="y_start:Q", y2="y_end:Q",
-                color=alt.Color(
-                    "label:N",
-                    scale=alt.Scale(
-                        domain=["Watch (<50)","Rising (50–70)","Elevated (70–85)","Critical (>85)"],
-                        range=["#b7e3b1","#fde28a","#f7b267","#f08080"]
-                    ),
-                    legend=alt.Legend(
-                        title="Risk Zone",
-                        orient="bottom",
-                        direction="horizontal",
-                        symbolSize=120,
-                        titleAnchor="middle"
-                    )
-                )
-            )
-        )
-        layers.append(bands)
-
-    # 2) Main line (always)
-    line = (
-        alt.Chart(df_plot)
-        .mark_line(point=False, strokeWidth=2, color="#e07b39")
-        .encode(
-            x=alt.X("Date:T", axis=alt.Axis(title="Date")),
-            y=alt.Y("AIBPS_RA:Q", scale=alt.Scale(domain=[ymin, ymax]),
-                    axis=alt.Axis(title="Composite Score (0–100)")),
-            tooltip=[
-                alt.Tooltip("Date:T", title="Date"),
-                alt.Tooltip("AIBPS_RA:Q", title="AIBPS (3Q RA)", format=".1f")
-            ],
-        )
+# Composite line
+comp_line = (
+    alt.Chart(comp_df)
+    .mark_line(strokeWidth=3)
+    .encode(
+        x=alt.X("date:T", title="Date"),
+        y=alt.Y("Composite:Q", title="AIBPS (0–100)", scale=alt.Scale(domain=[0, 100])),
+        tooltip=[
+            alt.Tooltip("date:T", title="Date"),
+            alt.Tooltip("Composite:Q", title=comp_col),
+        ],
     )
-    layers.append(line)
+)
 
-    # 3) Optional points
-    if show_points:
-        points = (
-            alt.Chart(df_plot)
-            .mark_circle(size=28, color="#e07b39", opacity=0.85)
-            .encode(
-                x="Date:T", y="AIBPS_RA:Q",
-                tooltip=[
-                    alt.Tooltip("Date:T", title="Date"),
-                    alt.Tooltip("AIBPS_RA:Q", title="AIBPS (3Q RA)", format=".1f")
-                ],
-            )
-        )
-        layers.append(points)
+# Pillar lines (faint)
+pillars_lines = (
+    alt.Chart(long_pillars)
+    .mark_line(strokeDash=[4, 3], opacity=0.5)
+    .encode(
+        x="date:T",
+        y=alt.Y("value:Q", scale=alt.Scale(domain=[0, 100])),
+        color=alt.Color("pillar:N", title="Pillar"),
+        tooltip=[
+            alt.Tooltip("date:T", title="Date"),
+            alt.Tooltip("pillar:N", title="Pillar"),
+            alt.Tooltip("value:Q", title="Value"),
+        ],
+    )
+)
 
-    # 4) Optional threshold rules
-    if show_rules:
-        rules_df = pd.DataFrame({"y": [50, 70, 85]})
-        rules = alt.Chart(rules_df).mark_rule(strokeDash=[4, 4], color="gray").encode(y="y:Q")
-        layers.append(rules)
+st.subheader("Composite over time")
 
-    chart = alt.layer(*layers).resolve_scale(y="shared").interactive()
-    st.altair_chart(chart, use_container_width=True)
+# We can't directly stretch the rects over x in Altair without some tricks;
+# Instead, we'll skip the rect chart and emulate bands with rules + background sense,
+# but to keep it simple, we focus on composite + pillar lines for now.
+main_chart = (
+    comp_line
+    + pillars_lines
+).properties(height=400)
 
-# ============================================================
-# Weighted Contributions (Latest Period)
-# ============================================================
-st.subheader("Weighted Contributions — Latest Period")
+st.altair_chart(main_chart, use_container_width=True)
 
-# Latest date with a composite value
-if df["AIBPS_custom"].notna().any():
-    latest_idx = df["AIBPS_custom"].last_valid_index()
-    latest_row = df.loc[latest_idx, present_pillars]
+st.caption(
+    "Solid line: composite AIBPS. Dashed lines: individual pillars (0–100 percentile). "
+    "Regime bands are implied by the scale: 0–40 Calm, 40–60 Normal-ish, 60–80 Elevated, 80–100 Extreme."
+)
 
-    # Effective weights on that row (after NaN-aware renorm)
-    eff_w_last = W_eff_norm.loc[latest_idx, present_pillars]
 
-    contrib = (latest_row * eff_w_last).rename("Contribution")
-    contrib_df = contrib.reset_index().rename(columns={"index":"Pillar"})
-    contrib_df["Weight"] = eff_w_last.values
-    contrib_df["Value"]  = latest_row.values
+# ---------- Contribution bar chart (latest date) ----------
 
-    bar = (
+st.subheader("Pillar contributions at latest composite date")
+
+# Choose a latest date where composite and at least some pillars are non-NaN
+latest_valid_idx = df[comp_col].dropna().index.max()
+row_pillars = df.loc[latest_valid_idx, present_pillars]
+contrib = (row_pillars * weight_series).dropna()
+
+if contrib.empty:
+    st.write("No valid contributions at latest date.")
+else:
+    contrib_df = contrib.reset_index().rename(columns={"index": "pillar", 0: "contribution"})
+    contrib_df["weight"] = contrib_df["pillar"].map(weight_series.to_dict())
+    contrib_df["value"] = contrib_df["pillar"].map(row_pillars.to_dict())
+
+    contrib_chart = (
         alt.Chart(contrib_df)
         .mark_bar()
         .encode(
-            x=alt.X("Pillar:N", sort=present_pillars),
-            y=alt.Y("Contribution:Q", title="Weighted contribution"),
+            x=alt.X("contribution:Q", title="Contribution to composite"),
+            y=alt.Y("pillar:N", title="Pillar", sort="-x"),
             tooltip=[
-                alt.Tooltip("Pillar:N"),
-                alt.Tooltip("Value:Q", format=".1f"),
-                alt.Tooltip("Weight:Q", format=".2f"),
-                alt.Tooltip("Contribution:Q", format=".1f"),
-            ]
+                alt.Tooltip("pillar:N", title="Pillar"),
+                alt.Tooltip("value:Q", title="Pillar value (0–100)"),
+                alt.Tooltip("weight:Q", title="Weight"),
+                alt.Tooltip("contribution:Q", title="Contribution"),
+            ],
         )
+        .properties(height=200)
     )
-    st.altair_chart(bar, use_container_width=True)
-    st.caption(f"Latest period: {latest_idx.date()} — AIBPS (raw) = {df.loc[latest_idx,'AIBPS_custom']:.1f}, "
-               f"AIBPS (3Q RA) = {df.loc[latest_idx,'AIBPS_RA']:.1f}")
-else:
-    st.info("No composite values available to compute contributions.")
+    st.altair_chart(contrib_chart, use_container_width=True)
+    st.caption(f"Contributions computed at {latest_valid_idx.date()} using current slider weights.")
 
-# ============================================================
-# Debugging / Data peek (optional)
-# ============================================================
-with st.expander("Debug: last 6 rows & effective weights (last row)"):
-    try:
-        st.write(df[present_pillars + ["AIBPS_custom", "AIBPS_RA"]].tail(6))
-        eff_last = W_eff_norm.tail(1).T
-        eff_last.columns = ["effective_weight_last_row"]
-        st.write(eff_last)
-    except Exception as e:
-        st.write(f"(debug failed: {e})")
 
-# ============================================================
-# Footer
-# ============================================================
-st.caption("AIBPS v0.2 — composite recalculates from pillar-aware weights; charts update live from processed CSVs.")
+# ---------- Debug expanders ----------
+
+with st.expander("Debug • composite tail (all pillars + composite)", expanded=False):
+    cols = [c for c in PILLAR_DESIRED + ["AIBPS", "AIBPS_RA", "AIBPS_dynamic", "AIBPS_RA_dynamic"] if c in df.columns]
+    st.write("Columns:", cols)
+    st.write(df[cols].tail(12))
+
+with st.expander("Debug • last available date per pillar", expanded=False):
+    last_dates = {}
+    for p in PILLAR_DESIRED:
+        if p in df.columns and not df[p].dropna().empty:
+            last_dates[p] = df[p].dropna().index.max().date()
+    if not last_dates:
+        st.write("No pillars with data.")
+    else:
+        ld_df = pd.DataFrame.from_dict(last_dates, orient="index", columns=["last_date"])
+        st.table(ld_df)
+    
+# Download option
+with st.expander("Download data", expanded=False):
+    csv_bytes = df.to_csv().encode("utf-8")
+    st.download_button(
+        label="Download full composite CSV",
+        data=csv_bytes,
+        file_name="aibps_composite.csv",
+        mime="text/csv",
+    )
