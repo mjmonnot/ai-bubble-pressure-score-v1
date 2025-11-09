@@ -198,7 +198,7 @@ def main():
     print("---- Columns in composite ----")
     print(list(df.columns))
     print("---- Tail (Market / Capex_Supply / components / Credit / AIBPS_RA) ----")
-    for col in [c for c in ["Market","Capex_Supply","Capex_Supply_Manual","Capex_Supply_Macro","Credit","AIBPS","AIBPS_RA"] if c in df.columns]:
+       for col in [c for c in ["Market","Capex_Supply","Capex_Supply_Manual","Capex_Supply_Macro","Credit","AIBPS","AIBPS_RA"] if c in df.columns]:
         print(f"{col}:")
         print(df[col].tail(6))
 
