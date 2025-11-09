@@ -142,11 +142,10 @@ jobs:
             echo "adoption_processed.csv missing"
           fi
      
-      # ----- SENTIMENT (manual CSV) -----
-      - name: Fetch Sentiment
+      # ----- SENTIMENT (Google Trends) -----
+      - name: Fetch Sentiment (Google Trends)
         run: |
           python src/aibps/fetch_sentiment.py
-
 
       - name: Sanity print sentiment tail
         run: |
