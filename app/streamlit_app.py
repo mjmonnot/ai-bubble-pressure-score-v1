@@ -291,15 +291,21 @@ rules = (
     .encode(y="level:Q")
 )
 
+# Use the earliest date in the data so labels sit near the left edge of the plot
+min_date = comp_df["date"].min()
+thresholds_with_x = thresholds.copy()
+thresholds_with_x["date"] = min_date
+
 labels = (
-    alt.Chart(thresholds)
+    alt.Chart(thresholds_with_x)
     .mark_text(align="left", dx=5, dy=-2, color="gray")
     .encode(
+        x=alt.X("date:T", title=""),
         y="level:Q",
-        x=alt.value(0),  # left side of chart
         text="label:N",
     )
 )
+
 
 st.subheader("Composite over time")
 
