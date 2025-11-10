@@ -25,7 +25,14 @@ import time
 import numpy as np
 import pandas as pd
 
-from .normalize import normalize_series
+# Make sure "src" is on sys.path so we can import aibps.normalize
+HERE = os.path.dirname(__file__)              # .../src/aibps
+SRC_ROOT = os.path.abspath(os.path.join(HERE, ".."))  # .../src
+if SRC_ROOT not in sys.path:
+    sys.path.insert(0, SRC_ROOT)
+
+from aibps.normalize import normalize_series
+
 
 PROC_DIR = os.path.join("data", "processed")
 OUT_PATH = os.path.join(PROC_DIR, "aibps_monthly.csv")
