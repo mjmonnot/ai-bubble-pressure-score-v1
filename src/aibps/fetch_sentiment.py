@@ -75,15 +75,25 @@ def main():
         except Exception as e:
             print(f"⚠️ pytrends failed for '{term}': {e}")
 
-  if not series_list:
-    print("⚠️ No Google Trends series fetched.")
-    if os.path.exists(OUT):
-        print("⚠️ Keeping existing sentiment_processed.csv (no overwrite).")
-        return
-    else:
-        print("⚠️ No existing sentiment file; writing empty Sentiment file.")
-        pd.DataFrame(columns=["Sentiment"]).to_csv(OUT)
-        return
+    # ---- Combine ----
+    if not series_list:
+        print("⚠️ No Google Trends series fetched.")
+        if os.path.exists(OUT):
+            print("⚠️ Keeping existing sentiment_processed.csv (no overwrite).")
+            return
+        else:
+            print("⚠️ No existing sentiment file; writing empty Sentiment file.")
+            pd.DataFrame(columns=["Sentiment"]).to_csv(OUT)
+            return
+
+    df = pd.concat(series_list, axis=1).sort_index()
+    df["Sentiment"] = df.mean(axis=1, skipna=True)
+    df = df[["Sentiment"]].dropna()
+
+    print(df.tail(10))
+    df.to_csv(OUT)
+    print(f"💾 Wrote {OUT} (rows={len(df)})")
+
 
 
     # Combine all terms into one dataframe
