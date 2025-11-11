@@ -231,6 +231,7 @@ def main():
 
     # ---- Compute AIBPS composite ----
 
+    # Equal weights across all available normalized pillars
     w = np.ones(len(normalized_pillars), dtype=float)
     w = w / w.sum()
     weights = pd.Series(w, index=normalized_pillars)
@@ -240,10 +241,36 @@ def main():
     print("---- Weights ----")
     print(weights)
 
-    base["AIBPS"] = base[normalized_pillars].mul(weights, axis=1).sum(axis=1, skipna=True)
+    vals = base[normalized_pillars]
+
+    # Build weight matrix aligned to vals
+    weight_vec = weights.reindex(normalized_pillars)
+    weight_matrix = pd.DataFrame(
+        np.broadcast_to(weight_vec.values, (len(vals), len(weight_vec))),
+        index=vals.index,
+        columns=normalized_pillars,
+    )
+
+    # Only count weights where we actually have data
+    effective_weights = weight_matrix.where(vals.notna())
+    weighted_vals = vals * effective_weights
+
+    weighted_sum = weighted_vals.sum(axis=1, skipna=True)
+    total_w = effective_weights.sum(axis=1)
+
+    composite = weighted_sum / total_w
+    composite[total_w == 0] = np.nan  # if no pillars, mark as NaN
+
+    # Require at least 2 pillars to define AIBPS
+    num_pillars_available = vals.notna().sum(axis=1)
+    composite[num_pillars_available < 2] = np.nan
+
+    base["AIBPS"] = composite
     base["AIBPS_RA"] = base["AIBPS"].rolling(3, min_periods=1).mean()
 
+    # Drop rows where composite is NaN
     out = base.dropna(subset=["AIBPS"], how="all")
+
 
     # ---- Debug tail ----
     print("---- Columns in composite output ----")
