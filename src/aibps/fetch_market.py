@@ -1,83 +1,108 @@
 # src/aibps/fetch_market.py
-# MARKER: fetch_market.py SAFE v4 — monthly resample, 12m change, rolling 10y percentiles
-import os, sys, time
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import List
+
 import numpy as np
 import pandas as pd
+import yfinance as yf
 
-RAW_DIR = os.path.join("data","raw")
-PRO_DIR = os.path.join("data","processed")
-os.makedirs(RAW_DIR, exist_ok=True); os.makedirs(PRO_DIR, exist_ok=True)
 
-START   = "1980-01-01"
-TICKERS = ["SOXX","QQQ"]
+DATA_DIR = Path("data")
+RAW_OUT = DATA_DIR / "raw" / "market_prices.csv"
+PROC_OUT = DATA_DIR / "processed" / "market_processed.csv"
 
-def rolling_pct_rank(series: pd.Series, window: int = 120) -> pd.Series:
-    """Percentile rank of the last value within a trailing window on MONTHLY data."""
-    def _rank_last(x):
-        s = pd.Series(x)
-        return float(s.rank(pct=True).iloc[-1] * 100.0)
-    return series.rolling(window, min_periods=max(24, window//4)).apply(_rank_last, raw=False)
+# Pull deep history — set as far back as you want (e.g., your 1980 birth-year!)
+START = "1980-01-01"
 
-def download_live():
+# Broad, long-history proxies (all exist on Yahoo and go back decades):
+# - ^GSPC = S&P 500 (long, stable history)
+# - ^IXIC = Nasdaq Composite
+# - ^NDX  = Nasdaq 100 (starts in the 1980s/1990s depending on vendor)
+# You can add/remove tickers; the code will equal-weight whatever succeeds.
+TICKERS: List[str] = ["^GSPC", "^IXIC", "^NDX"]
+
+
+def _fetch_one(ticker: str, start: str) -> pd.Series | None:
+    """Fetch one ticker's adjusted close as a monthly series."""
     try:
-        import yfinance as yf
-        frames = []
-        for t in TICKERS:
-            df = yf.download(t, start=START, auto_adjust=True, progress=False)
-            if df is None or df.empty or "Close" not in df:
-                print(f"⚠️ yfinance empty for {t}; skipping"); continue
-            s = df["Close"]
-            s.index = pd.to_datetime(s.index); s.index.name = "Date"
-            frames.append(s.to_frame(name=t))              # SAFE: no .rename(...)
-        if not frames:
-            return None
-        daily = pd.concat(frames, axis=1).sort_index()
-        daily.index.name = "Date"
-        return daily
+        df = yf.download(ticker, start=start, auto_adjust=True, progress=False)
     except Exception as e:
-        print(f"⚠️ yfinance failed: {e}")
+        print(f"⚠️ yfinance exception for {ticker}: {e}")
         return None
 
-def load_sample_or_generate():
-    sample = os.path.join("data","sample","market_prices_sample.csv")
-    if os.path.exists(sample):
-        print(f"ℹ️ Using sample market file: {sample}")
-        return pd.read_csv(sample, index_col=0, parse_dates=True).sort_index()
-    idx = pd.date_range("2015-01-31","2025-12-31",freq="M")
-    soxx = np.linspace(100,400,len(idx)) + np.random.normal(0,10,len(idx))
-    qqq  = np.linspace( 90,380,len(idx)) + np.random.normal(0,10,len(idx))
-    return pd.DataFrame({"SOXX":soxx,"QQQ":qqq}, index=idx)
+    if df is None or df.empty or "Close" not in df.columns:
+        print(f"⚠️ Empty/invalid data for {ticker}; skipping.")
+        return None
+
+    s = df["Close"].copy()
+    s.index = pd.to_datetime(s.index)
+    s.index.name = "date"
+
+    # Convert to month-end frequency: last available close in each month
+    s = s.resample("M").last().dropna()
+
+    # Guard against all-NaN
+    if s.empty:
+        print(f"⚠️ No monthly data for {ticker} after resample; skipping.")
+        return None
+
+    # Return as a named Series (no .rename(...) to avoid previous pitfalls)
+    s.name = ticker
+    return s
+
 
 def main():
-    print("MARKER fetch_market.py v4 — pandas", pd.__version__)
-    t0 = time.time()
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    RAW_OUT.parent.mkdir(parents=True, exist_ok=True)
+    PROC_OUT.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1) raw daily → save
-    daily = download_live() or load_sample_or_generate()
-    daily = daily.sort_index()
-    raw_path = os.path.join(RAW_DIR,"market_prices.csv")
-    daily.to_csv(raw_path)
-    print(f"💾 raw → {raw_path}  rows={len(daily)}")
+    frames: List[pd.Series] = []
+    for t in TICKERS:
+        s = _fetch_one(t, START)
+        if s is not None:
+            frames.append(s)
 
-    # 2) resample to month-end closes, then 12-month change
-    monthly = daily.resample("M").last()
-    mon_12m = monthly.pct_change(12) * 100.0   # <-- monthly base, robust at tail
+    if not frames:
+        print("❌ No market series fetched; aborting.")
+        return
 
-    # 3) rolling 10y percentiles (120 months)
-    out = pd.DataFrame(index=mon_12m.index)
-    if "SOXX" in mon_12m:
-        out["MKT_SOXX_1y_pct"] = rolling_pct_rank(mon_12m["SOXX"], 120)
-    if "QQQ" in mon_12m:
-        out["MKT_QQQ_1y_pct"]  = rolling_pct_rank(mon_12m["QQQ"], 120)
+    # Wide panel of monthly levels
+    wide = pd.concat(frames, axis=1).sort_index()
+    wide.index.name = "date"
 
-    out = out.dropna(how="all")
-    pro_path = os.path.join(PRO_DIR,"market_processed.csv")
-    out.to_csv(pro_path)
-    print(f"💾 processed → {pro_path}  rows={len(out)}  cols={list(out.columns)}")
-    print(f"⏱  Done in {time.time()-t0:.2f}s")
+    # Persist raw multi-ticker panel for reference/debug
+    wide.to_csv(RAW_OUT)
+    print(f"💾 Wrote {RAW_OUT} with columns: {list(wide.columns)}")
+    print(f"   Date span: {wide.index.min().date()} → {wide.index.max().date()}")
+
+    # Build an equal-weighted, rebased composite so scales are comparable
+    # 1) Rebase each ticker to 100 at its first valid point
+    rebased = wide.copy()
+    for col in rebased.columns:
+        first_valid = rebased[col].dropna().iloc[0] if rebased[col].notna().any() else np.nan
+        if np.isfinite(first_valid) and first_valid != 0:
+            rebased[col] = (rebased[col] / first_valid) * 100.0
+        else:
+            rebased[col] = np.nan
+
+    # 2) Equal-weight across available tickers each month
+    market_eqw = rebased.mean(axis=1, skipna=True)
+
+    # 3) Clean output frame for compute.py
+    out = pd.DataFrame({"Market": market_eqw}).dropna(how="all")
+    out.index.name = "date"
+
+    # Sanity prints
+    print("---- Market composite tail (rebased, EW) ----")
+    print(out.tail(6))
+    print(f"✅ Market composite span: {out.index.min().date()} → {out.index.max().date()}")
+
+    out.to_csv(PROC_OUT)
+    print(f"💾 Wrote {PROC_OUT} (rows={len(out)})")
+
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"❌ fetch_market.py: {e}"); sys.exit(1)
+    main()
