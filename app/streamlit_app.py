@@ -450,61 +450,42 @@ with st.expander("Capex / Supply pillar debug"):
         cap = pd.read_csv(cap_path, index_col=0, parse_dates=True).sort_index()
         cap.index.name = "date"
 
-        # Identify columns
-        composite_col = "Capex_Supply"
-        idx_cols = [c for c in cap.columns if c.startswith("Capex_") and c.endswith("_idx")]
-        raw_cols = [c for c in cap.columns if c.startswith("Capex_") and c.endswith("_raw")]
-
         st.write("Tail of capex_processed.csv:")
         st.dataframe(cap.tail(10))
 
-        # 1) Rebased index view (0 = baseline, 100 = first point)
-        if idx_cols:
-            st.markdown("**Rebased Capex indexes (100 = first valid point):**")
-            cap_idx_long = (
-                cap[[composite_col] + idx_cols]
+        # Try to identify Capex-related columns in a forgiving way
+        # Priority 1: anything with 'Capex' in the name or named 'Capex_Supply'
+        cap_cols = [c for c in cap.columns if ("Capex" in c) or (c == "Capex_Supply")]
+
+        # Fallback: if that somehow finds nothing, just plot all numeric columns
+        if not cap_cols:
+            cap_cols = cap.select_dtypes(include="number").columns.tolist()
+
+        if not cap_cols:
+            st.info("No numeric Capex columns found to plot.")
+        else:
+            st.markdown("**Capex components and composite (whatever is available):**")
+            cap_long = (
+                cap[cap_cols]
                 .reset_index()
                 .melt(id_vars="date", var_name="Series", value_name="Value")
                 .dropna(subset=["Value"])
             )
 
-            cap_idx_chart = (
-                alt.Chart(cap_idx_long)
+            cap_chart = (
+                alt.Chart(cap_long)
                 .mark_line()
                 .encode(
-                    x="date:T",
-                    y=alt.Y("Value:Q", title="Index (rebased to 100)"),
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("Value:Q", title="Value (mixed units / indexes)"),
                     color="Series:N",
                     tooltip=["date:T", "Series:N", "Value:Q"],
                 )
                 .properties(height=260)
                 .interactive()
             )
-            st.altair_chart(cap_idx_chart, use_container_width=True)
+            st.altair_chart(cap_chart, use_container_width=True)
 
-        # 2) Raw level view for intuition
-        if raw_cols:
-            st.markdown("**Raw Capex levels (native FRED units):**")
-            cap_raw_long = (
-                cap[raw_cols]
-                .reset_index()
-                .melt(id_vars="date", var_name="Series", value_name="Value")
-                .dropna(subset=["Value"])
-            )
-
-            cap_raw_chart = (
-                alt.Chart(cap_raw_long)
-                .mark_line()
-                .encode(
-                    x="date:T",
-                    y=alt.Y("Value:Q", title="Level (native units)"),
-                    color="Series:N",
-                    tooltip=["date:T", "Series:N", "Value:Q"],
-                )
-                .properties(height=260)
-                .interactive()
-            )
-            st.altair_chart(cap_raw_chart, use_container_width=True)
 
 
 # ---------- Footer ----------
