@@ -442,38 +442,49 @@ with st.expander("Credit pillar debug"):
 
 # ---------- Pillar-by-pillar debug: Capex ----------
 
-with st.expander("Capex / Supply pillar debug"):
-    cap_path = os.path.join("data", "processed", "capex_processed.csv")
-    if not os.path.exists(cap_path):
-        st.info("capex_processed.csv not found.")
+with st.expander("Infrastructure (Infra) pillar debug"):
+    # Try multiple possible processed files
+    infra_candidates = [
+        os.path.join("data", "processed", "infra_processed.csv"),
+        os.path.join("data", "processed", "infra_macro_processed.csv"),
+    ]
+
+    infra_path = None
+    for p in infra_candidates:
+        if os.path.exists(p):
+            infra_path = p
+            break
+
+    if infra_path is None:
+        st.info("No infra_processed.csv or infra_macro_processed.csv found.")
     else:
-        cap = pd.read_csv(cap_path, index_col=0, parse_dates=True).sort_index()
-        cap.index.name = "date"
+        st.write(f"Using file: `{infra_path}`")
 
-        st.write("Tail of capex_processed.csv:")
-        st.dataframe(cap.tail(10))
+        infra = pd.read_csv(infra_path, index_col=0, parse_dates=True).sort_index()
+        infra.index.name = "date"
 
-        # Try to identify Capex-related columns in a forgiving way
-        # Priority 1: anything with 'Capex' in the name or named 'Capex_Supply'
-        cap_cols = [c for c in cap.columns if ("Capex" in c) or (c == "Capex_Supply")]
+        st.write("Tail of infra processed data:")
+        st.dataframe(infra.tail(10))
 
-        # Fallback: if that somehow finds nothing, just plot all numeric columns
-        if not cap_cols:
-            cap_cols = cap.select_dtypes(include="number").columns.tolist()
+        # Try to identify Infra-related columns
+        infra_cols = [c for c in infra.columns if ("Infra" in c) or (c == "Infra")]
+        if not infra_cols:
+            # Fallback: plot all numeric columns
+            infra_cols = infra.select_dtypes(include="number").columns.tolist()
 
-        if not cap_cols:
-            st.info("No numeric Capex columns found to plot.")
+        if not infra_cols:
+            st.info("No numeric Infra columns found to plot.")
         else:
-            st.markdown("**Capex components and composite (whatever is available):**")
-            cap_long = (
-                cap[cap_cols]
+            st.markdown("**Infra components and/or composite:**")
+            infra_long = (
+                infra[infra_cols]
                 .reset_index()
                 .melt(id_vars="date", var_name="Series", value_name="Value")
                 .dropna(subset=["Value"])
             )
 
-            cap_chart = (
-                alt.Chart(cap_long)
+            infra_chart = (
+                alt.Chart(infra_long)
                 .mark_line()
                 .encode(
                     x=alt.X("date:T", title="Date"),
@@ -484,7 +495,8 @@ with st.expander("Capex / Supply pillar debug"):
                 .properties(height=260)
                 .interactive()
             )
-            st.altair_chart(cap_chart, use_container_width=True)
+
+            st.altair_chart(infra_chart, use_container_width=True)
 
 
 
