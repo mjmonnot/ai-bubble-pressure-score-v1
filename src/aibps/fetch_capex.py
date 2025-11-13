@@ -83,16 +83,23 @@ def main():
     df.index.name = "date"
 
     # Rebase each to 100
-    rebased = df.apply(_rebase_100)
-    rebased.columns = [
-        f"Capex_{c.replace('-', '_')}_idx" for c in rebased.columns
-    ]
+rebased = df.apply(_rebase_100)
+rebased.columns = [
+    f"Capex_{c.replace('-', '_')}_idx" for c in rebased.columns
+]
 
-    # Composite: equal-weight of all rebased components
-    composite = rebased.mean(axis=1, skipna=True).rename("Capex_Supply")
+# Keep raw levels for debug
+raw_cols = [f"Capex_{c}_raw" for c in df.columns]
+raw = df.copy()
+raw.columns = raw_cols
 
-    out = pd.concat([composite, rebased], axis=1)
-    out = out.dropna(how="all")
+# Composite: equal-weight of all rebased components
+composite = rebased.mean(axis=1, skipna=True).rename("Capex_Supply")
+
+# Final table: composite + rebased + raw
+out = pd.concat([composite, rebased, raw], axis=1)
+out = out.dropna(how="all")
+
 
     PROC_OUT.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(PROC_OUT)
