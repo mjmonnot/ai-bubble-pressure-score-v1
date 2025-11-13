@@ -95,37 +95,18 @@ jobs:
           echo "---- TAIL: data/processed/macro_capex_processed.csv ----"
           tail -n 10 data/processed/macro_capex_processed.csv || true
 
-
-
-
-      # ----- INFRA (manual + macro) -----
-      - name: Fetch Infra (manual CSV)
-        run: |
-          python src/aibps/fetch_infra.py
-
-      - name: Sanity print infra tail
-        run: |
-          echo "---- TAIL: data/processed/infra_processed.csv ----"
-          if [ -f data/processed/infra_processed.csv ]; then
-            tail -n 10 data/processed/infra_processed.csv
-          else
-            echo "infra_processed.csv missing"
-          fi
-
-      - name: Fetch Macro Infra (FRED)
+      - name: Fetch Infra Macro (power IP + capacity)
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
           python src/aibps/fetch_infra_macro.py
-
-      - name: Sanity print infra macro tail
-        run: |
           echo "---- TAIL: data/processed/infra_macro_processed.csv ----"
           if [ -f data/processed/infra_macro_processed.csv ]; then
             tail -n 10 data/processed/infra_macro_processed.csv
           else
             echo "infra_macro_processed.csv missing"
           fi
+
 
       # ----- ADOPTION (manual) -----
       - name: Fetch Adoption (manual CSV)
