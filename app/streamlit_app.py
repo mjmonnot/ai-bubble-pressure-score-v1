@@ -554,6 +554,118 @@ with st.expander("Infrastructure (Infra) Pillar Debug"):
         else:
             st.info("No numeric Infra columns to plot.")
 
+# -----------------------------
+# ADOPTION PILLAR DEBUG
+# -----------------------------
+with st.expander("Adoption Pillar Debug"):
+    adoption_candidates = [
+        os.path.join("data", "processed", "adoption_processed.csv"),
+        os.path.join("data", "processed", "adoption_macro_processed.csv"),
+    ]
+
+    adoption_path = None
+    for p in adoption_candidates:
+        if os.path.exists(p):
+            adoption_path = p
+            break
+
+    if adoption_path is None:
+        st.info("No adoption_processed.csv or adoption_macro_processed.csv found.")
+    else:
+        st.write(f"Using file: `{adoption_path}`")
+
+        ad = pd.read_csv(adoption_path, index_col=0, parse_dates=True).sort_index()
+        ad.index.name = "date"
+
+        st.write("Tail of Adoption processed data:")
+        st.dataframe(ad.tail(10))
+
+        # Try to identify adoption-related columns
+        ad_cols = [c for c in ad.columns if "Adoption" in c or c.lower().startswith("adopt")]
+        if not ad_cols:
+            ad_cols = ad.select_dtypes(include="number").columns.tolist()
+
+        if ad_cols:
+            ad_long = (
+                ad[ad_cols]
+                .reset_index()
+                .melt(id_vars="date", var_name="Series", value_name="Value")
+                .dropna(subset=["Value"])
+            )
+
+            ad_chart = (
+                alt.Chart(ad_long)
+                .mark_line()
+                .encode(
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("Value:Q", title="Value (mixed units / indexes)"),
+                    color="Series:N",
+                    tooltip=["date:T", "Series:N", "Value:Q"],
+                )
+                .properties(height=260)
+                .interactive()
+            )
+
+            st.altair_chart(ad_chart, use_container_width=True)
+        else:
+            st.info("No numeric Adoption columns to plot.")
+
+# -----------------------------
+# SENTIMENT PILLAR DEBUG
+# -----------------------------
+with st.expander("Sentiment Pillar Debug"):
+    sentiment_candidates = [
+        os.path.join("data", "processed", "sentiment_processed.csv"),
+        os.path.join("data", "processed", "sentiment_trends_processed.csv"),
+    ]
+
+    sentiment_path = None
+    for p in sentiment_candidates:
+        if os.path.exists(p):
+            sentiment_path = p
+            break
+
+    if sentiment_path is None:
+        st.info("No sentiment_processed.csv or sentiment_trends_processed.csv found.")
+    else:
+        st.write(f"Using file: `{sentiment_path}`")
+
+        sent = pd.read_csv(sentiment_path, index_col=0, parse_dates=True).sort_index()
+        sent.index.name = "date"
+
+        st.write("Tail of Sentiment processed data:")
+        st.dataframe(sent.tail(10))
+
+        # Try to identify sentiment-related columns
+        sent_cols = [c for c in sent.columns if "Sentiment" in c or "Hype" in c]
+        if not sent_cols:
+            sent_cols = sent.select_dtypes(include="number").columns.tolist()
+
+        if sent_cols:
+            sent_long = (
+                sent[sent_cols]
+                .reset_index()
+                .melt(id_vars="date", var_name="Series", value_name="Value")
+                .dropna(subset=["Value"])
+            )
+
+            sent_chart = (
+                alt.Chart(sent_long)
+                .mark_line()
+                .encode(
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("Value:Q", title="Value (mixed units / indexes)"),
+                    color="Series:N",
+                    tooltip=["date:T", "Series:N", "Value:Q"],
+                )
+                .properties(height=260)
+                .interactive()
+            )
+
+            st.altair_chart(sent_chart, use_container_width=True)
+        else:
+            st.info("No numeric Sentiment columns to plot.")
+
 
 
 # ---------- Footer ----------
