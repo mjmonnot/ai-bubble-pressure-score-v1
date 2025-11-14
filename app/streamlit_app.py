@@ -40,6 +40,14 @@ if df.empty:
     st.error("Composite file is empty. Check workflows / processed inputs.")
     st.stop()
 
+# Force all visualizations to start from 1980
+MIN_DATE = pd.Timestamp("1980-01-01")
+df = df[df.index >= MIN_DATE]
+if df.empty:
+    st.error("No composite data available from 1980 onward.")
+    st.stop()
+
+
 df.index.name = "date"
 
 # Figure out which of our six conceptual pillars actually exist
