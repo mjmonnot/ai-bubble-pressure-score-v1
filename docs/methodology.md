@@ -175,3 +175,150 @@ Inflated post-2023 (values near 99).
 
 # ⚙️ 3. Data Flow Architecture
 
+     +------------------------+
+     |   GitHub Actions CI     |
+     +------------------------+
+                 |
+                 v
+    +--------------------------+
+    |  fetch_* scripts (FRED,  |
+    |  yfinance, trends, etc.) |
+    +--------------------------+
+                 |
+                 v
+    +--------------------------+
+    |   data/processed/*.csv   |
+    +--------------------------+
+                 |
+                 v
+    +--------------------------+
+    |      compute.py          |
+    | (normalize + composite)  |
+    +--------------------------+
+                 |
+                 v
+    +--------------------------+
+    |   aibps_monthly.csv      |
+    +--------------------------+
+                 |
+                 v
+    +--------------------------+
+    |   Streamlit dashboard    |
+    +--------------------------+
+
+
+---
+
+# 📊 4. Normalization & Scaling
+
+Because pillars use heterogeneous units, each is normalized using:
+
+### **4.1 Rolling Z-Score**
+Captures how unusual the present is relative to the last 24–120 months.
+
+### **4.2 Clipping**
+Prevents rare extremes from dominating.
+
+### **4.3 Sigmoid Transform**
+Maps z-scores → 0–100, compressing pathological outliers.
+
+---
+
+# 📚 5. Composite Score Construction
+
+AIBPS(t):
+
+\[
+\text{AIBPS}(t) = \sum_{i=1}^{6} w_i\,P_i(t)
+\]
+
+A rolling average version is also computed:
+
+\[
+\text{AIBPS\_RA}(t) = \text{SMA}_{6\text{mo}}(\text{AIBPS}(t))
+\]
+
+Weights default to equal (1/6), but are user-adjustable.
+
+---
+
+# 🎓 6. How to Interpret the AIBPS
+
+### ✔ **0–20: Depressed / Deflated**
+- Weak private investment  
+- Fearful credit markets  
+- No speculative excess  
+- Often seen after recessions  
+
+### ✔ **20–40: Stable / Normal**
+- Healthy growth  
+- No overheating indicators  
+- Reasonable credit conditions  
+
+### ✔ **40–60: Accelerating**
+- Investment rising  
+- Valuations expanding  
+- Media attention increasing  
+
+### ✔ **60–80: Elevated Risk**
+- Credit spreads tight  
+- Capex rising faster than adoption  
+- Sentiment markets heating up  
+
+### ✔ **80–100: Bubble Pressure Zone**
+Indicates that multiple pillars simultaneously show atypical exuberance.
+
+Historically consistent with:
+
+- Dot-Com (1998–2000)  
+- Housing bubble peak (2006–2007)  
+- Crypto bubble (late 2021)  
+
+---
+
+# 📘 7. APA References
+
+**FRED Series**  
+Federal Reserve Bank of St. Louis. (n.d.). *FRED Economic Data.* https://fred.stlouisfed.org/
+
+- BAMLH0A0HYM2. (n.d.). ICE BofA high yield option-adjusted spread.  
+- BAMLCC0A0CM. (n.d.). ICE BofA corporate index option-adjusted spread.  
+- PNFI. (n.d.). Private nonresidential fixed investment.  
+- UNXANO. (n.d.). Nonresidential structures.  
+- IPB53800. (n.d.). Semiconductor industrial production index.  
+- CAPUTLB50001SQ. (n.d.). Semiconductor capacity utilization.  
+- CAPUTLG2211S. (n.d.). Electric power generation capacity utilization.  
+- DTCTRC1A027NBEA. (n.d.). Software investment.  
+- TLPCINS. (n.d.). ICT equipment investment.  
+- ITNETUSERP2USA. (n.d.). Internet users per 100 people.  
+- CEU6054150001. (n.d.). Computer systems employment.  
+
+**Google Trends**  
+Google. (n.d.). *Google Trends.* https://trends.google.com/
+
+---
+
+# 🚀 8. Roadmap
+
+### Near-Term  
+- Expand Infra (EIA grid + power data)  
+- Expand Adoption (ITU + OpenAlex + cloud adoption)  
+- Add GDELT sentiment components  
+- Add “raw vs normalized vs indexed” toggle  
+
+### Mid-Term  
+- Bubble regime classification module  
+- Subpillar weighting panel  
+- Scenario simulation engine  
+
+### Long-Term  
+- Full academic preprint (AIBPS v1.0)  
+- Real-time API  
+- Research-grade backtesting suite  
+
+---
+
+# 📎 End of Document
+
+
+
