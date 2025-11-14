@@ -1,133 +1,177 @@
-# 📐 AIBPS Methodology — Quantitative Framework
-
-The **AI Bubble Pressure Score (AIBPS)** is a composite indicator derived from 20+ sub-indicators organized into five structural pillars.  
-Each component is normalized, weighted, and combined to produce a continuous 0–100 composite score representing systemic “bubble pressure.”
-
----
-
-## 🧮 1. Core Equation
-
-The composite index at time *t* is defined as:
-
-\[
-AIBPS_t = \sum_{i=1}^{5} w_i \cdot P_{i,t}
-\]
-
-where:  
-- \( P_{i,t} \) = Pillar *i* normalized percentile score at time *t*  
-- \( w_i \) = Weight of pillar *i* (default weights sum to 1.0)  
-
-Default weight vector:
-
-| Pillar | Symbol | Default Weight |
-|---------|---------|----------------|
-| Market Valuations | \( w_1 \) | 0.25 |
-| Capex & Supply Chain | \( w_2 \) | 0.25 |
-| Infrastructure (Power/DC) | \( w_3 \) | 0.20 |
-| Adoption & Productivity | \( w_4 \) | 0.15 |
-| Credit & Liquidity | \( w_5 \) | 0.15 |
+# 🧭 AI Bubble Pressure Score (AIBPS)  
+### *Methodology, Data Sources, and Interpretation Guide*  
+_Last updated: {{DATE}}_
 
 ---
 
-## ⚙️ 2. Normalization
+## 📌 Overview
 
-Each indicator is standardized using its **10-year historical distribution**:
+The **AI Bubble Pressure Score (AIBPS)** is a composite macro-indicator designed to quantify speculative pressure in the AI ecosystem. It integrates six independent pillars:
 
-### a. For risk-positive metrics (where higher = more speculative)
-\[
-P_{i,t} = 100 \times \text{PercentileRank}(X_{i,t})
-\]
+| Pillar | Icon | Domain |
+|-------|------|---------|
+| **Market** | 📈 | Prices, flows, risk appetite |
+| **Credit** | 💳 | Liquidity, spreads, leverage |
+| **Capex / Supply** | 🏗️ | Compute, chips, investment |
+| **Infrastructure** | 🔌 | Power, grid, communication |
+| **Adoption** | 🌐 | Real usage, workforce, diffusion |
+| **Sentiment** | 🔥 | Hype intensity, narrative tone |
 
-### b. For risk-negative metrics (where higher = less speculative)
-\[
-P_{i,t} = 100 \times \left(1 - \text{PercentileRank}(X_{i,t})\right)
-\]
-
-Where \( X_{i,t} \) represents the raw indicator value (e.g., P/E ratio, HY spread).
-
-This transformation ensures comparability across diverse units and scales.
+Each pillar is normalized, transformed, and aggregated into a **0–100 index** representing system-wide “bubble pressure.”
 
 ---
 
-## 📊 3. Rolling Smoothing
+# 🎯 1. Conceptual Goal
 
-To minimize noise and highlight cycle trends, a **three-quarter rolling average** is applied:
+Bubbles emerge when **expectations, investment, and sentiment** outpace **real-world fundamentals**.
 
-\[
-AIBPS_{t,smoothed} = \frac{AIBPS_t + AIBPS_{t-1} + AIBPS_{t-2}}{3}
-\]
+The AIBPS tracks this imbalance by measuring *how extreme the current environment is compared to its own historical norms* dating back to **1980**.
 
-This version is used in the dashboard’s primary time-series visualization.
+It is not:
 
----
+- a price target  
+- a valuation model  
+- a forecast  
 
-## 🚨 4. Threshold Logic
-
-AIBPS defines four interpretive zones:
-
-| Range | Label | Typical Interpretation |
-|--------|--------|------------------------|
-| 0–50 | **Watch** | Normal activity |
-| 50–70 | **Rising Pressure** | Overinvestment building |
-| 70–85 | **Elevated Risk** | Reflexivity & concentration increasing |
-| 85–100 | **Critical Zone** | Systemic overheating; high fragility |
-
-**Trigger Conditions:**
-1. AIBPS > 80 for 3+ consecutive months → *Systemic Overheating Alert*  
-2. Any two pillars exceed 85th percentile simultaneously → *Sectoral Bubble Alert*  
-3. Market pillar declines >15 points within 2 quarters while composite >70 → *Early Collapse Signal*
+It is a **stress indicator**.
 
 ---
 
-## 🧠 5. Pillar Sub-Indicators (Examples)
+# 🧱 2. Pillar Definitions
 
-| Pillar | Example Indicators | Frequency | Source |
-|---------|-------------------|------------|---------|
-| Market | SOXX, QQQ, NVDA returns, volatility skew | Daily | Yahoo Finance |
-| Capex & Supply | Hyperscaler capex %, SEMI book-to-bill | Quarterly | SEC filings, SEMI.org |
-| Infra | Power queue MW, DC vacancy, rent growth | Semiannual | ISO, CBRE |
-| Adoption | Cloud AI revenue, token usage, productivity deltas | Quarterly | Company reports |
-| Credit | HY/IG OAS, margin debt, VC funding volumes | Monthly | FRED, Crunchbase |
+Below is the **current implementation (v0.2)**, scoped to what is *actually* running in your automated GitHub → Streamlit pipeline.
 
 ---
 
-## 🧩 6. Data Integration Pipeline
+## 📈 2.1 Market Pillar  
+**Icon:** 📈  
+**Concept:** Investor exuberance, flows into AI-exposed assets, valuation momentum.
 
-data/raw/ # Source CSVs, APIs
-data/processed/ # Normalized & z-scored data
-app/streamlit_app.py
-src/aibps/compute.py -> normalization, weighting, smoothing
-src/aibps/visualize.py -> radar, timeseries, export
+**Current Data Sources:**
 
+- NVDA  
+- SOXX, SMH  
+- QQQ, XLK  
+- AMD, TSM, ARM  
+- Market-volume proxies  
+
+**Processing:**
+
+- Daily → monthly resampling  
+- Rolling 10-year z-score  
+- Sigmoid transformation → 0–100  
+
+**Interpretation:**  
+Higher = increasing investor overconfidence; speculative valuations.
 
 ---
 
-## 📈 7. Example Pseudocode
+## 💳 2.2 Credit Pillar  
+**Icon:** 💳  
+**Concept:** Bubbles thrive when credit markets underprice risk.
 
-```python
-import pandas as pd
-import numpy as np
+**Current Data Sources (FRED):**
 
-# Load and standardize indicator data
-df = pd.read_csv("data/processed/indicators.csv")
-for col in df.columns:
-    ascending = col not in ["credit_spread", "liquidity_index"]
-    df[col + "_pct"] = df[col].rank(pct=True, ascending=ascending) * 100
+- High-Yield OAS (BAMLH0A0HYM2)  
+- Investment-Grade OAS (BAMLCC0A0CM)  
 
-# Compute pillar and composite
-weights = {"Market":0.25,"Capex_Supply":0.25,"Infra":0.2,"Adoption":0.15,"Credit":0.15}
-df["AIBPS"] = sum(df[p]*w for p,w in weights.items())
+**Processing:**
 
-# Rolling average for dashboard
-df["AIBPS_RA"] = df["AIBPS"].rolling(3, min_periods=1).mean()
+- Invert spreads (low spreads = high pressure)  
+- Rolling 10-year z-sigmoid  
 
-🔮 8. Future Extensions
+**Interpretation:**  
+Higher = cheaper risk-taking, low fear, liquidity abundance.
 
-- Add sub-pillar decomposition (e.g., “AI hardware vs software exposure”)
-- Integrate sentiment and policy uncertainty indices
-- Model lag effects with VAR or Bayesian updating
+---
 
-🪪 License
+## 🏗️ 2.3 Capex / Supply Pillar  
+**Icon:** 🏗️  
+**Concept:** Overexpansion of compute, chips, and data center capacity.
 
-MIT License © 2025  
-See the LICENSE file for details.
+**Current Data Sources (FRED):**
+
+- PNFI (Private Nonresidential Fixed Investment)  
+- UNXANO (Nonresidential structures)  
+- Software investment series  
+- ICT equipment investment  
+- Semiconductor production index  
+- Fab capacity utilization  
+
+**Processing:**
+
+- Annual/quarterly → monthly  
+- Rebase first non-NA = 100  
+- Composite = average of all rebased components  
+
+**Interpretation:**  
+Higher = increasing risk of overbuild.
+
+---
+
+## 🔌 2.4 Infrastructure Pillar  
+**Icon:** 🔌  
+**Concept:** Grid, power, and communication infrastructure stress.
+
+**Current Data Sources (FRED):**
+
+- Power + communication structures investment  
+- Electric grid capacity utilization  
+
+**Processing:**  
+Same as Capex (rebased monthly composite).
+
+**Interpretation:**  
+Higher = more rapid expansion of physical infrastructure.
+
+---
+
+## 🌐 2.5 Adoption Pillar  
+**Icon:** 🌐  
+**Concept:** Sustainable demand: real-world adoption by businesses, consumers, and labor.
+
+**Current Data Sources (placeholder):**
+
+- Internet users per 100 people (annually)  
+- Computer systems workforce employment  
+
+**Current Behavior:**  
+Flat—requires upgrade to more granular datasets.
+
+**Planned Improvements:**
+
+- ITU broadband data  
+- AI publications (OpenAlex)  
+- Cloud adoption metrics  
+- AI workforce share (LinkedIn/BLS)  
+- HuggingFace model usage  
+
+---
+
+## 🔥 2.6 Sentiment Pillar  
+**Icon:** 🔥  
+**Concept:** Narrative hype intensity, media attention, public obsession.
+
+**Current Data Sources:**
+
+- Google Trends for:
+  - “AI”
+  - “Artificial Intelligence”
+  - “ChatGPT”
+  - “OpenAI”
+  - “Machine Learning”
+
+**Current Behavior:**  
+Inflated post-2023 (values near 99).
+
+**Planned Upgrades:**
+
+- GDELT news volume  
+- Earnings call NLP  
+- Reddit / HackerNews discussion volumes  
+- X/Twitter (if available)  
+
+---
+
+# ⚙️ 3. Data Flow Architecture
+
