@@ -1,102 +1,92 @@
 # src/aibps/fetch_adoption.py
-# Adoption pillar (manual / curated):
-# - Reads data/raw/adoption_manual.csv
-# - Aggregates to monthly total / index
-# - Computes rolling/expanding percentile (0–100)
-# - Writes data/processed/adoption_processed.csv with column "Adoption"
+from __future__ import annotations
 
-import os, sys, time
-import pandas as pd
+import os
+from pathlib import Path
+
 import numpy as np
-
-RAW = os.path.join("data", "raw", "adoption_manual.csv")
-OUT = os.path.join("data", "processed", "adoption_processed.csv")
-os.makedirs(os.path.dirname(OUT), exist_ok=True)
+import pandas as pd
 
 
-def _expanding_pct(series: pd.Series) -> pd.Series:
-    out = []
-    vals = series.values
-    for i in range(len(vals)):
-        s = pd.Series(vals[: i + 1])
-        out.append(float(s.rank(pct=True).iloc[-1] * 100.0))
-    return pd.Series(out, index=series.index)
+DATA_DIR = Path("data")
+PROC_OUT = DATA_DIR / "processed" / "adoption_processed.csv"
+START = "1980-01-01"
+
+# FRED series:
+# - ITNETUSERP2USA: Internet users per 100 people (annual)
+# - CEU6054150001: All employees, computer systems design and related services (monthly, NSA)
+ADOPTION_SERIES = {
+    "Adopt_InternetUsers": "ITNETUSERP2USA",
+    "Adopt_CompSys_Empl": "CEU6054150001",
+}
 
 
-def rolling_pct_rank_flexible(series: pd.Series, window: int = 120) -> pd.Series:
+def _to_monthly(s: pd.Series) -> pd.Series:
     """
-    For shorter histories: expanding percentile.
-    For longer histories: rolling window percentile.
+    Convert annual or monthly FRED series to end-of-month monthly frequency via forward fill.
     """
-    series = series.dropna()
-    n = len(series)
-    if n == 0:
-        return series
-    if n < 24:
-        return _expanding_pct(series)
+    s = pd.Series(s).sort_index()
+    s.index = pd.to_datetime(s.index)
+    s.index.name = "date"
+    s = s.resample("M").ffill()
+    s = s[s.index >= pd.to_datetime(START)]
+    return s
 
-    def _rank_last(x):
-        s = pd.Series(x)
-        return float(s.rank(pct=True).iloc[-1] * 100.0)
 
-    minp = max(24, window // 4)
-    return series.rolling(window, min_periods=minp).apply(_rank_last, raw=False)
+def _rebase_100(s: pd.Series) -> pd.Series:
+    if not s.notna().any():
+        return s * np.nan
+    first = s.dropna().iloc[0]
+    if not np.isfinite(first) or first == 0:
+        return s * np.nan
+    return (s / first) * 100.0
 
 
 def main():
-    t0 = time.time()
-    if not os.path.exists(RAW):
-        print(f"ℹ️ {RAW} not found. Writing header only.")
-        pd.DataFrame(columns=["Adoption"]).to_csv(OUT)
+    key = os.getenv("FRED_API_KEY")
+    if not key:
+        print("⚠️ No FRED_API_KEY — cannot fetch Adoption data.")
         return
 
-    try:
-        # Use python engine to be tolerant of odd lines; warn instead of crash
-        df = pd.read_csv(RAW, engine="python")
-    except Exception as e:
-        print(f"❌ Failed to read {RAW}: {e}")
-        pd.DataFrame(columns=["Adoption"]).to_csv(OUT)
-        sys.exit(1)
+    from fredapi import Fred
+    fred = Fred(api_key=key)
 
-    # Expect at least date + value; extra columns (segment, metric, unit, notes) are fine.
-    if "date" not in df.columns or "value" not in df.columns:
-        raise ValueError("adoption_manual.csv must include 'date' and 'value' columns.")
+    frames = {}
+    for label, sid in ADOPTION_SERIES.items():
+        try:
+            raw = fred.get_series(sid, observation_start=START)
+            monthly = _to_monthly(raw)
+            frames[label] = monthly
+        except Exception as e:
+            print(f"⚠️ Failed to fetch {sid} ({label}): {e}")
 
-    # Parse date column -> datetime
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df[~df["date"].isna()].copy()
-
-    # Snap date to month-end (this does NOT touch the index, only the column)
-    df["date"] = df["date"].dt.to_period("M").dt.to_timestamp("M")
-
-    # Clean numeric values
-    df["value"] = pd.to_numeric(df["value"], errors="coerce")
-    df = df[~df["value"].isna()].copy()
-
-    if df.empty:
-        print("ℹ️ adoption_manual.csv produced no valid rows after cleaning.")
-        pd.DataFrame(columns=["Adoption"]).to_csv(OUT)
+    if not frames:
+        print("❌ No Adoption series fetched; not writing file.")
         return
 
-    # Aggregate to monthly total / index
-    monthly = df.groupby("date")["value"].sum().sort_index()
+    df = pd.concat(frames.values(), axis=1)
+    df.columns = list(frames.keys())
+    df.index.name = "date"
 
-    # Percentile transform
-    adopt_pct = rolling_pct_rank_flexible(monthly, window=120)
-    adopt_pct.index.name = "date"
+    # Rebase each component to 100 at its first valid point
+    rebased = df.apply(_rebase_100)
+    rebased_cols = [f"{c}_idx" for c in rebased.columns]
+    rebased.columns = rebased_cols
 
-    out = pd.DataFrame({"Adoption": adopt_pct}).dropna(how="all")
-    out.to_csv(OUT)
+    # Composite: equal-weight of rebased components
+    composite = rebased.mean(axis=1, skipna=True).rename("Adoption")
 
-    print(f"💾 Wrote {OUT} ({len(out)} rows)")
-    print("Tail:")
-    print(out.tail(6))
-    print(f"⏱  Done in {time.time() - t0:.2f}s")
+    out = pd.concat([composite, rebased, df.add_suffix("_raw")], axis=1)
+    out = out.dropna(how="all")
+
+    PROC_OUT.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(PROC_OUT)
+
+    print("---- Adoption composite tail ----")
+    print(out[["Adoption"]].tail(6))
+    print(f"💾 Wrote {PROC_OUT} with columns: {list(out.columns)}")
+    print(f"Range: {out.index.min().date()} → {out.index.max().date()}")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"❌ fetch_adoption.py: {e}")
-        sys.exit(1)
+    main()
