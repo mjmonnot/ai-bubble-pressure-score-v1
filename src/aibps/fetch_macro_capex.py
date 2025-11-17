@@ -1,21 +1,21 @@
 """
-fetch_macro_capex.py
+fetch_capex_macro.py
 
 Builds a fabrication + cloud-compute-oriented Capex index for the AIBPS:
 
 - Macro compute/fab component from FRED:
   * A679RL1Q225SBEA – Real private fixed investment in information processing equipment and software
-  * B935RX1A020NBEA – Real private fixed investment: nonresidential equipment: computers and peripheral equipment
+  * B935RX1A020NBEA – Real private fixed investment: nonresidential equipment: computers and peripherals
   * PCU333242333242 – PPI: Semiconductor Machinery Manufacturing
 
-- Optional hyperscaler capex component from:
+- Hyperscaler capex component from:
   data/raw/hyperscaler_capex.csv
 
 Outputs:
   data/processed/macro_capex_processed.csv with columns:
     - Capex_Supply          (composite of macro + hyperscaler where available)
     - Capex_Macro_Comp      (macro compute/fab sub-index)
-    - Capex_Hyperscaler     (hyperscaler capex sub-index, if present)
+    - Capex_Hyperscaler     (hyperscaler capex sub-index)
 """
 
 import os
@@ -79,10 +79,9 @@ def fetch_macro_series(fred):
                 print(f"⚠️ FRED returned empty for {sid}; skipping.")
                 continue
             df = ser.to_frame(name=col_name)
-            # FRED series typically have DateTimeIndex already; just ensure it is so:
             df.index = pd.to_datetime(df.index)
             df = df.sort_index()
-            # We want monthly data; resample to monthly end with forward fill
+            # Resample to monthly end with forward fill
             df_m = df.resample("M").ffill()
             frames.append(df_m)
             print(f"✅ FRED series {sid} → {col_name}: {df_m.index.min().date()} to {df_m.index.max().date()}")
@@ -94,7 +93,6 @@ def fetch_macro_series(fred):
         return None
 
     combined = pd.concat(frames, axis=1).sort_index()
-    # Drop rows where all sub-series are NaN
     combined = combined.dropna(how="all")
     return combined
 
@@ -102,24 +100,14 @@ def fetch_macro_series(fred):
 def scale_to_index(series: pd.Series, baseline_date: pd.Timestamp, name: str) -> pd.Series:
     """
     Scale a series to an index=100 at baseline_date (or first non-NaN as fallback).
-
-    Args:
-        series: pd.Series
-        baseline_date: Timestamp for desired index=100
-        name: series name for logging
-
-    Returns:
-        pd.Series scaled
     """
     s = series.copy()
 
-    # choose baseline
     baseline_val = np.nan
     if baseline_date in s.index and not pd.isna(s.loc[baseline_date]):
         baseline_val = s.loc[baseline_date]
         print(f"🔧 {name}: using baseline {baseline_date.date()} value={baseline_val:.3f} for index=100")
     else:
-        # fallback: first non-NaN
         first_idx = s.first_valid_index()
         if first_idx is not None:
             baseline_val = s.loc[first_idx]
@@ -147,7 +135,6 @@ def build_macro_capex_index(macro_df: pd.DataFrame) -> pd.Series:
     for col in df.columns:
         df[col] = scale_to_index(df[col], BASELINE_DATE, col)
 
-    # Simple equal-weight average of available components
     macro_index = df.mean(axis=1)
     macro_index.name = "Capex_Macro_Comp"
     print("✅ Built Capex_Macro_Comp composite.")
@@ -156,11 +143,11 @@ def build_macro_capex_index(macro_df: pd.DataFrame) -> pd.Series:
 
 def load_hyperscaler_capex() -> pd.Series | None:
     """
-    Load optional hyperscaler capex data from:
+    Load hyperscaler capex data from:
       data/raw/hyperscaler_capex.csv
 
-    Expected columns:
-      date, Amazon, Microsoft, Google, Meta, ...
+    Expected schema (what we just created):
+      Year,AWS,Microsoft,Google,Meta,Total,IsEstimate,Source
 
     Returns:
         Monthly pd.Series named 'Capex_Hyperscaler' or None if file missing/invalid.
@@ -176,33 +163,51 @@ def load_hyperscaler_capex() -> pd.Series | None:
         print(f"⚠️ Failed to read {csv_path}: {e}")
         return None
 
-    if "date" not in df.columns:
-        print("⚠️ hyperscaler_capex.csv must contain a 'date' column.")
+    # Handle date / Year
+    if "date" in df.columns:
+        # Already have a date column
+        try:
+            df["date"] = pd.to_datetime(df["date"])
+        except Exception as e:
+            print(f"⚠️ Failed to parse 'date' column in hyperscaler_capex.csv: {e}")
+            return None
+    elif "Year" in df.columns:
+        # Convert Year to end-of-year date
+        try:
+            df["date"] = pd.to_datetime(df["Year"].astype(str) + "-12-31")
+        except Exception as e:
+            print(f"⚠️ Failed to convert 'Year' to dates in hyperscaler_capex.csv: {e}")
+            return None
+    else:
+        print("⚠️ hyperscaler_capex.csv must contain either 'date' or 'Year' column.")
         return None
 
-    # Treat all non-'date' columns as provider series
-    value_cols = [c for c in df.columns if c.lower() != "date"]
+    df = df.set_index("date").sort_index()
+
+    # Known provider columns we care about
+    candidate_cols = ["AWS", "Microsoft", "Google", "Meta"]
+    value_cols = [c for c in candidate_cols if c in df.columns]
+
     if not value_cols:
-        print("⚠️ hyperscaler_capex.csv has no provider columns; skipping.")
+        # Fallback: any numeric columns that are not clearly metadata
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        value_cols = [
+            c for c in numeric_cols
+            if c.lower() not in ["total", "isestimate", "year"]
+        ]
+
+    if not value_cols:
+        print("⚠️ hyperscaler_capex.csv has no usable numeric provider columns; skipping.")
         return None
 
-    try:
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.set_index("date").sort_index()
-    except Exception as e:
-        print(f"⚠️ Failed to parse dates in hyperscaler_capex.csv: {e}")
-        return None
-
-    # Sum across providers to get a global hyperscaler capex measure
     total = df[value_cols].sum(axis=1)
     total.name = "Capex_Hyperscaler"
 
-    # Make it monthly by forward-filling annual/irregular points
+    # Make it monthly by forward-filling annual points
     monthly_idx = pd.date_range(total.index.min(), total.index.max(), freq="M")
     total_m = total.reindex(monthly_idx).ffill()
     total_m.index.name = "Date"
 
-    # Scale to index=100 at baseline
     total_m = scale_to_index(total_m, BASELINE_DATE, "Capex_Hyperscaler")
     total_m.name = "Capex_Hyperscaler"
 
@@ -217,26 +222,21 @@ def main():
     macro_df = fetch_macro_series(fred)
 
     if macro_df is None:
-        # Fallback: synthetic flat series
         print("⚠️ Falling back to synthetic macro capex index (constant 100).")
-        idx = pd.date_range("1980-01-31", periods=12 * 10, freq="M")  # 10 years as minimal fallback
+        idx = pd.date_range("1980-01-31", periods=12 * 10, freq="M")
         macro_index = pd.Series(100.0, index=idx, name="Capex_Macro_Comp")
     else:
         macro_index = build_macro_capex_index(macro_df)
 
     hyper_series = load_hyperscaler_capex()
 
-    # Combine into a single DataFrame
     df = pd.DataFrame(index=macro_index.index)
     df["Capex_Macro_Comp"] = macro_index
 
     if hyper_series is not None:
         df = df.join(hyper_series, how="outer")
-        # Re-align macro to combined index range, ffill where necessary
         df["Capex_Macro_Comp"] = df["Capex_Macro_Comp"].ffill()
         df["Capex_Hyperscaler"] = df["Capex_Hyperscaler"].ffill()
-
-        # Composite Capex_Supply = simple average of available components
         df["Capex_Supply"] = df[["Capex_Macro_Comp", "Capex_Hyperscaler"]].mean(axis=1)
         print("✅ Built Capex_Supply from macro + hyperscaler components.")
     else:
@@ -244,7 +244,6 @@ def main():
         print("ℹ️ Capex_Supply uses Capex_Macro_Comp only (no hyperscaler component).")
 
     df = df.sort_index()
-    # Drop any rows where Capex_Supply is NaN
     df = df.dropna(subset=["Capex_Supply"])
 
     print("---- Tail of macro_capex_processed.csv ----")
@@ -255,5 +254,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # Allow running as a script
     sys.exit(main())
