@@ -453,100 +453,116 @@ with st.expander("Credit pillar debug"):
 # -----------------------------
 # CAPEX / SUPPLY PILLAR DEBUG
 # -----------------------------
+
+
+
 with st.expander("Capex pillar debug", expanded=False):
     st.markdown("### Capex subcomponents (diagnostic view)")
 
-    # 1) Identify all Capex-related columns in the composite DF
-    capex_cols = [c for c in df.columns if c.startswith("Capex_")]
-    if not capex_cols:
-        st.info("No Capex_* columns found in composite dataframe.")
+    macro_capex_path = "data/processed/macro_capex_processed.csv"
+
+    if not os.path.exists(macro_capex_path):
+        st.warning(f"`{macro_capex_path}` not found. Run the update-data workflow first.")
     else:
-        # 2) Let user choose which components to visualize
-        default_selection = [c for c in capex_cols if c != "Capex_Supply"] or capex_cols
-        selected_cols = st.multiselect(
-            "Select Capex components to display",
-            options=capex_cols,
-            default=default_selection,
-            help="Includes Capex_Macro_Comp, Capex_Semi_Activity, Capex_IT_Equip, Capex_Constr, "
-                 "Capex_Hyperscaler, Capex_Fab_Index, Capex_DC_Cost_Index, Capex_Supply (composite).",
-        )
+        try:
+            capex_df = pd.read_csv(macro_capex_path, parse_dates=["Date"]).set_index("Date").sort_index()
+        except Exception as e:
+            st.error(f"Failed to read `{macro_capex_path}`: {e}")
+            st.stop()
 
-        if not selected_cols:
-            st.warning("Select at least one Capex component to view.")
+        # 1) Identify all Capex-related columns in the macro capex file
+        capex_cols = [c for c in capex_df.columns if c.startswith("Capex_")]
+        if not capex_cols:
+            st.info("No Capex_* columns found in macro_capex_processed.csv.")
         else:
-            # 3) Tail table of selected components
-            st.markdown("**Latest 12 months (selected components)**")
-            st.dataframe(df[selected_cols].tail(12))
-
-            # 4) Time-series chart of selected Capex components
-            capex_long = (
-                df[selected_cols]
-                .reset_index(names="date")
-                .melt(id_vars="date", var_name="Component", value_name="Value")
+            # 2) Let user choose which components to visualize
+            default_selection = [c for c in capex_cols if c != "Capex_Supply"] or capex_cols
+            selected_cols = st.multiselect(
+                "Select Capex components to display",
+                options=capex_cols,
+                default=default_selection,
+                help=(
+                    "Includes Capex_Macro_Comp, Capex_Semi_Activity, Capex_IT_Equip, "
+                    "Capex_Constr, Capex_Hyperscaler, Capex_Fab_Index, "
+                    "Capex_DC_Cost_Index, Capex_Supply (composite)."
+                ),
             )
 
-            capex_ts = (
-                alt.Chart(capex_long)
-                .mark_line()
-                .encode(
-                    x=alt.X("date:T", title="Date"),
-                    y=alt.Y("Value:Q", title="Index (0–100)"),
-                    color=alt.Color("Component:N", title="Capex Component"),
-                    tooltip=[
-                        alt.Tooltip("date:T", title="Date"),
-                        alt.Tooltip("Component:N", title="Component"),
-                        alt.Tooltip("Value:Q", title="Index (0–100)", format=".1f"),
-                    ],
-                )
-                .properties(
-                    height=260,
-                    title="Capex components over time (normalized indices)"
-                )
-            )
-            st.altair_chart(capex_ts, use_container_width=True)
-
-            # 5) Current-date contribution snapshot (bar chart)
-            #    Use the latest date where at least one selected component is non-NaN
-            latest_idx = df[selected_cols].dropna(how="all").index.max()
-            if pd.isna(latest_idx):
-                st.info("No valid recent data to compute current Capex contributions.")
+            if not selected_cols:
+                st.warning("Select at least one Capex component to view.")
             else:
-                latest_values = df.loc[latest_idx, selected_cols].dropna()
-                if latest_values.empty:
-                    st.info("Latest row has no non-missing Capex values.")
+                # 3) Latest 12 months table
+                st.markdown("**Latest 12 months (selected components)**")
+                st.dataframe(capex_df[selected_cols].tail(12))
+
+                # 4) Time-series chart of selected Capex components
+                capex_long = (
+                    capex_df[selected_cols]
+                    .reset_index(names="date")
+                    .melt(id_vars="date", var_name="Component", value_name="Value")
+                )
+
+                capex_ts = (
+                    alt.Chart(capex_long)
+                    .mark_line()
+                    .encode(
+                        x=alt.X("date:T", title="Date"),
+                        y=alt.Y("Value:Q", title="Index (0–100)"),
+                        color=alt.Color("Component:N", title="Capex Component"),
+                        tooltip=[
+                            alt.Tooltip("date:T", title="Date"),
+                            alt.Tooltip("Component:N", title="Component"),
+                            alt.Tooltip("Value:Q", title="Index (0–100)", format=".1f"),
+                        ],
+                    )
+                    .properties(
+                        height=260,
+                        title="Capex components over time (normalized indices)"
+                    )
+                )
+                st.altair_chart(capex_ts, use_container_width=True)
+
+                # 5) Current-date contribution snapshot (bar chart)
+                latest_idx = capex_df[selected_cols].dropna(how="all").index.max()
+                if pd.isna(latest_idx):
+                    st.info("No valid recent data to compute current Capex contributions.")
                 else:
-                    contrib_df = (
-                        latest_values.reset_index()
-                        .rename(columns={"index": "Component", latest_idx: "Value"})
-                    )
-                    contrib_df["Component"] = contrib_df["Component"].astype(str)
-
-                    st.markdown(
-                        f"**Current Capex contributions** (as of `{latest_idx.date()}`; normalized 0–100)"
-                    )
-
-                    capex_bar = (
-                        alt.Chart(contrib_df)
-                        .mark_bar()
-                        .encode(
-                            x=alt.X("Component:N", title="Capex Component", sort="-y"),
-                            y=alt.Y("Value:Q", title="Index (0–100)"),
-                            tooltip=[
-                                alt.Tooltip("Component:N", title="Component"),
-                                alt.Tooltip("Value:Q", title="Index (0–100)", format=".1f"),
-                            ],
+                    latest_values = capex_df.loc[latest_idx, selected_cols].dropna()
+                    if latest_values.empty:
+                        st.info("Latest row has no non-missing Capex values.")
+                    else:
+                        contrib_df = (
+                            latest_values.reset_index()
+                            .rename(columns={"index": "Component", latest_idx: "Value"})
                         )
-                        .properties(height=260)
-                    )
+                        contrib_df["Component"] = contrib_df["Component"].astype(str)
 
-                    st.altair_chart(capex_bar, use_container_width=True)
+                        st.markdown(
+                            f"**Current Capex contributions** "
+                            f"(as of `{latest_idx.date()}`; normalized 0–100)"
+                        )
 
-                    # Optional: small text summary
-                    top_comp = contrib_df.sort_values("Value", ascending=False).iloc[0]
-                    st.caption(
-                        f"Top Capex driver at the latest date: **{top_comp['Component']}** "
-                        f"(~{top_comp['Value']:.1f} on a 0–100 normalized scale)."
-                    )
+                        capex_bar = (
+                            alt.Chart(contrib_df)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X("Component:N", title="Capex Component", sort="-y"),
+                                y=alt.Y("Value:Q", title="Index (0–100)"),
+                                tooltip=[
+                                    alt.Tooltip("Component:N", title="Component"),
+                                    alt.Tooltip("Value:Q", title="Index (0–100)", format=".1f"),
+                                ],
+                            )
+                            .properties(height=260)
+                        )
+
+                        st.altair_chart(capex_bar, use_container_width=True)
+
+                        top_comp = contrib_df.sort_values("Value", ascending=False).iloc[0]
+                        st.caption(
+                            f"Top Capex driver at the latest date: **{top_comp['Component']}** "
+                            f"(~{top_comp['Value']:.1f} on a 0–100 normalized scale)."
+                        )
 
 
 # -----------------------------
