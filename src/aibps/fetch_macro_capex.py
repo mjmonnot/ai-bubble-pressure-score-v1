@@ -1,21 +1,51 @@
 """
-fetch_capex_macro.py
+fetch_macro_capex.py
 
-Builds a fabrication + cloud-compute-oriented Capex index for the AIBPS:
+Builds a fabrication + cloud-compute-oriented Capex index for the AIBPS.
 
-- Macro compute/fab component from FRED:
-  * A679RL1Q225SBEA – Real private fixed investment in information processing equipment and software
-  * B935RX1A020NBEA – Real private fixed investment: nonresidential equipment: computers and peripherals
-  * PCU333242333242 – PPI: Semiconductor Machinery Manufacturing
+Components included:
 
-- Hyperscaler capex component from:
-  data/raw/hyperscaler_capex.csv
+(1) Macro compute/fab (FRED), original series:
+    - A679RL1Q225SBEA – Real private fixed investment in info processing equipment & software
+    - B935RX1A020NBEA – Real private fixed investment: nonresidential equipment: computers & peripherals
+    - PCU333242333242 – PPI: Semiconductor Machinery Manufacturing
 
-Outputs:
-  data/processed/macro_capex_processed.csv with columns:
-    - Capex_Supply          (composite of macro + hyperscaler where available)
-    - Capex_Macro_Comp      (macro compute/fab sub-index)
-    - Capex_Hyperscaler     (hyperscaler capex sub-index)
+(2) Additional FRED-based capex / supply-chain signals (A–C):
+    A. Semiconductor production / capacity:
+       - IPG336413     – Industrial Production: Semiconductors and Related Devices
+       - IPN336413     – Capacity Utilization: Semiconductors and Related Devices
+
+    B. IT equipment & processing investment:
+       - Y033RC1Q027SBEA – Private fixed investment in information processing equipment
+       - ITNETINV        – (If available) IT equipment & software investment (check FRED docs)
+
+    C. Construction / structures proxies:
+       - PNFI        – Private nonresidential fixed investment
+       - PRFI        – Private residential fixed investment
+       - TLRESCONS   – Total construction spending (private + public), if available
+
+(3) Hyperscaler capex:
+    - data/raw/hyperscaler_capex.csv
+      (Year, AWS, Microsoft, Google, Meta, ...)
+
+(4) Fabrication capex:
+    - data/raw/fab_capex.csv
+      (Year, TSMC, Samsung, Intel, ...)
+
+(5) Datacenter construction cost index:
+    - data/raw/dc_cost_index.csv
+      (Date, Cost_Index, ...)
+
+Output:
+    data/processed/macro_capex_processed.csv with columns such as:
+      - Capex_Supply
+      - Capex_Macro_Comp            (original macro composite)
+      - Capex_Semi_Activity         (A: semi production/capacity)
+      - Capex_IT_Equip              (B: IT equip/investment)
+      - Capex_Constr                (C: construction proxies)
+      - Capex_Hyperscaler
+      - Capex_Fab_Index
+      - Capex_DC_Cost_Index
 """
 
 import os
@@ -29,67 +59,91 @@ PROC_DIR = Path("data") / "processed"
 RAW_DIR = Path("data") / "raw"
 OUT_PATH = PROC_DIR / "macro_capex_processed.csv"
 
-# FRED series IDs (compute & semiconductor-related)
-SERIES_INFO = {
-    "A679RL1Q225SBEA": "InfoProc_EquipSoft_Real",  # Real private fixed investment in info processing equipment & software
-    "B935RX1A020NBEA": "Comp_Periph_Real",         # Real private fixed investment: computers & peripherals
-    "PCU333242333242": "PPI_Semi_Machinery",       # PPI: Semiconductor Machinery Manufacturing
+# ----------------------------
+# FRED series configuration
+# ----------------------------
+
+# Your original macro capex proxies
+CORE_FRED_SERIES = {
+    "A679RL1Q225SBEA": "InfoProc_EquipSoft_Real",
+    "B935RX1A020NBEA": "Comp_Periph_Real",
+    "PCU333242333242": "PPI_Semi_Machinery",
 }
 
-BASELINE_DATE = pd.Timestamp("2015-12-31")  # baseline for index=100 scaling
+# New additional FRED series for A–C
+EXTRA_FRED_SERIES = {
+    # A: Semiconductor production / capacity
+    "IPG336413": "IP_Semi_Prod",   # Industrial Production: Semiconductors & Related Devices
+    "IPN336413": "CU_Semi_Cap",    # Capacity Utilization: Semiconductors & Related Devices
+
+    # B: IT equipment / processing investment
+    "Y033RC1Q027SBEA": "Inv_InfoProc_Equip",
+    # "ITNETINV": "Inv_IT_EquipSoft",  # Uncomment if this series exists in FRED for you
+
+    # C: Construction / structures proxies
+    "PNFI": "Priv_Nonres_FixedInv",
+    "PRFI": "Priv_Res_FixedInv",
+    "TLRESCONS": "Total_Constr_Spending",  # may or may not exist; will be skipped if invalid
+}
+
+BASELINE_DATE = pd.Timestamp("2015-12-31")
 
 
 def get_fred():
     """Instantiate Fred client if API key exists, else return None."""
     key = os.getenv("FRED_API_KEY")
     if not key:
-        print("⚠️ No FRED_API_KEY set; cannot fetch real macro capex. Will fall back to placeholder if needed.")
+        print("⚠️ No FRED_API_KEY set; cannot fetch real macro capex.")
         return None
 
     try:
         from fredapi import Fred  # type: ignore
     except ImportError:
-        print("⚠️ fredapi not installed; falling back to placeholder synthetic capex.")
+        print("⚠️ fredapi not installed; cannot fetch from FRED.")
         return None
 
     try:
         fred = Fred(api_key=key)
         return fred
     except Exception as e:
-        print(f"⚠️ Failed to initialize Fred with provided API key: {e}")
+        print(f"⚠️ Failed to initialize Fred: {e}")
         return None
 
 
-def fetch_macro_series(fred):
+def fetch_fred_block(fred, series_map: dict, label: str) -> pd.DataFrame | None:
     """
-    Fetch and assemble macro/fab-related series from FRED.
+    Fetch a set of FRED series defined in series_map and resample to monthly.
+
+    Args:
+        fred: Fred client or None
+        series_map: dict of {series_id: column_name}
+        label: text label for logging
 
     Returns:
-        pd.DataFrame monthly with columns for each macro sub-series,
-        or None if everything fails.
+        DataFrame of monthly series, or None if all fail.
     """
     if fred is None:
+        print(f"ℹ️ No FRED client; skipping {label} block.")
         return None
 
     frames = []
-    for sid, col_name in SERIES_INFO.items():
+    for sid, col_name in series_map.items():
         try:
             ser = fred.get_series(sid)
             if ser is None or len(ser) == 0:
-                print(f"⚠️ FRED returned empty for {sid}; skipping.")
+                print(f"⚠️ FRED returned empty for {sid} ({col_name}); skipping.")
                 continue
             df = ser.to_frame(name=col_name)
             df.index = pd.to_datetime(df.index)
             df = df.sort_index()
-            # Resample to monthly end with forward fill
             df_m = df.resample("M").ffill()
             frames.append(df_m)
-            print(f"✅ FRED series {sid} → {col_name}: {df_m.index.min().date()} to {df_m.index.max().date()}")
+            print(f"✅ FRED {sid} → {col_name} [{label}]: {df_m.index.min().date()} to {df_m.index.max().date()}")
         except Exception as e:
-            print(f"⚠️ Failed to fetch {sid}: {e}")
+            print(f"⚠️ Failed to fetch {sid} ({col_name}) [{label}]: {e}")
 
     if not frames:
-        print("⚠️ No macro capex series fetched from FRED.")
+        print(f"⚠️ No series fetched for {label} block.")
         return None
 
     combined = pd.concat(frames, axis=1).sort_index()
@@ -98,63 +152,51 @@ def fetch_macro_series(fred):
 
 
 def scale_to_index(series: pd.Series, baseline_date: pd.Timestamp, name: str) -> pd.Series:
-    """
-    Scale a series to an index=100 at baseline_date (or first non-NaN as fallback).
-    """
+    """Scale a series to index=100 at baseline_date (or first valid)."""
     s = series.copy()
 
     baseline_val = np.nan
     if baseline_date in s.index and not pd.isna(s.loc[baseline_date]):
         baseline_val = s.loc[baseline_date]
-        print(f"🔧 {name}: using baseline {baseline_date.date()} value={baseline_val:.3f} for index=100")
+        print(f"🔧 {name}: baseline {baseline_date.date()} value={baseline_val:.3f}")
     else:
         first_idx = s.first_valid_index()
         if first_idx is not None:
             baseline_val = s.loc[first_idx]
-            print(f"🔧 {name}: baseline {baseline_date.date()} missing; using first valid {first_idx.date()} value={baseline_val:.3f} for index=100")
+            print(f"🔧 {name}: using first valid {first_idx.date()} value={baseline_val:.3f} as baseline")
         else:
-            print(f"⚠️ {name}: series has no valid values; returning as-is.")
+            print(f"⚠️ {name}: no valid values; returning unscaled.")
             return s
 
     if baseline_val == 0 or np.isnan(baseline_val):
-        print(f"⚠️ {name}: baseline value invalid; returning unscaled.")
+        print(f"⚠️ {name}: invalid baseline; returning unscaled.")
         return s
 
-    s = (s / baseline_val) * 100.0
-    return s
+    return (s / baseline_val) * 100.0
 
 
-def build_macro_capex_index(macro_df: pd.DataFrame) -> pd.Series:
+def build_macro_block_index(df: pd.DataFrame, name: str) -> pd.Series:
     """
-    Given a DataFrame of macro series, create a composite macro capex index.
-
-    Returns:
-        pd.Series named 'Capex_Macro_Comp'
+    Scale each column to an index and average into a composite.
     """
-    df = macro_df.copy()
-    for col in df.columns:
-        df[col] = scale_to_index(df[col], BASELINE_DATE, col)
+    if df is None or df.empty:
+        return pd.Series(dtype=float, name=name)
 
-    macro_index = df.mean(axis=1)
-    macro_index.name = "Capex_Macro_Comp"
-    print("✅ Built Capex_Macro_Comp composite.")
-    return macro_index
+    tmp = df.copy()
+    for col in tmp.columns:
+        tmp[col] = scale_to_index(tmp[col], BASELINE_DATE, col)
+
+    idx = tmp.mean(axis=1)
+    idx.name = name
+    print(f"✅ Built composite index {name} from columns: {list(tmp.columns)}")
+    return idx
 
 
 def load_hyperscaler_capex() -> pd.Series | None:
-    """
-    Load hyperscaler capex data from:
-      data/raw/hyperscaler_capex.csv
-
-    Expected schema (what we just created):
-      Year,AWS,Microsoft,Google,Meta,Total,IsEstimate,Source
-
-    Returns:
-        Monthly pd.Series named 'Capex_Hyperscaler' or None if file missing/invalid.
-    """
+    """Load hyperscaler capex from data/raw/hyperscaler_capex.csv."""
     csv_path = RAW_DIR / "hyperscaler_capex.csv"
     if not csv_path.exists():
-        print(f"ℹ️ No hyperscaler capex file at {csv_path}; skipping hyperscaler component.")
+        print(f"ℹ️ No hyperscaler capex file at {csv_path}.")
         return None
 
     try:
@@ -163,51 +205,40 @@ def load_hyperscaler_capex() -> pd.Series | None:
         print(f"⚠️ Failed to read {csv_path}: {e}")
         return None
 
-    # Handle date / Year
     if "date" in df.columns:
-        # Already have a date column
         try:
             df["date"] = pd.to_datetime(df["date"])
         except Exception as e:
-            print(f"⚠️ Failed to parse 'date' column in hyperscaler_capex.csv: {e}")
+            print(f"⚠️ Failed to parse 'date' in hyperscaler_capex.csv: {e}")
             return None
     elif "Year" in df.columns:
-        # Convert Year to end-of-year date
         try:
             df["date"] = pd.to_datetime(df["Year"].astype(str) + "-12-31")
         except Exception as e:
             print(f"⚠️ Failed to convert 'Year' to dates in hyperscaler_capex.csv: {e}")
             return None
     else:
-        print("⚠️ hyperscaler_capex.csv must contain either 'date' or 'Year' column.")
+        print("⚠️ hyperscaler_capex.csv must contain 'date' or 'Year'.")
         return None
 
     df = df.set_index("date").sort_index()
 
-    # Known provider columns we care about
     candidate_cols = ["AWS", "Microsoft", "Google", "Meta"]
     value_cols = [c for c in candidate_cols if c in df.columns]
-
     if not value_cols:
-        # Fallback: any numeric columns that are not clearly metadata
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        value_cols = [
-            c for c in numeric_cols
-            if c.lower() not in ["total", "isestimate", "year"]
-        ]
+        value_cols = [c for c in numeric_cols if c.lower() not in ["total", "isestimate", "year"]]
 
     if not value_cols:
-        print("⚠️ hyperscaler_capex.csv has no usable numeric provider columns; skipping.")
+        print("⚠️ No usable provider columns in hyperscaler_capex.csv.")
         return None
 
     total = df[value_cols].sum(axis=1)
     total.name = "Capex_Hyperscaler"
 
-    # Make it monthly by forward-filling annual points
     monthly_idx = pd.date_range(total.index.min(), total.index.max(), freq="M")
     total_m = total.reindex(monthly_idx).ffill()
     total_m.index.name = "Date"
-
     total_m = scale_to_index(total_m, BASELINE_DATE, "Capex_Hyperscaler")
     total_m.name = "Capex_Hyperscaler"
 
@@ -215,33 +246,175 @@ def load_hyperscaler_capex() -> pd.Series | None:
     return total_m
 
 
+def load_fab_capex() -> pd.Series | None:
+    """Load fabrication capex from data/raw/fab_capex.csv."""
+    csv_path = RAW_DIR / "fab_capex.csv"
+    if not csv_path.exists():
+        print(f"ℹ️ No fab capex file at {csv_path}.")
+        return None
+
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as e:
+        print(f"⚠️ Failed to read {csv_path}: {e}")
+        return None
+
+    if "Year" not in df.columns:
+        print("⚠️ fab_capex.csv must contain 'Year'.")
+        return None
+
+    try:
+        df["date"] = pd.to_datetime(df["Year"].astype(str) + "-12-31")
+    except Exception as e:
+        print(f"⚠️ Failed to convert 'Year' to dates in fab_capex.csv: {e}")
+        return None
+
+    df = df.set_index("date").sort_index()
+
+    candidate_cols = ["TSMC", "Samsung", "Intel"]
+    value_cols = [c for c in candidate_cols if c in df.columns]
+    if not value_cols:
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        value_cols = [c for c in numeric_cols if c.lower() not in ["total", "isestimate", "year"]]
+
+    if not value_cols:
+        print("⚠️ No usable fab columns in fab_capex.csv.")
+        return None
+
+    total = df[value_cols].sum(axis=1)
+    total.name = "Capex_Fab_Raw"
+
+    monthly_idx = pd.date_range(total.index.min(), total.index.max(), freq="M")
+    total_m = total.reindex(monthly_idx).ffill()
+    total_m.index.name = "Date"
+
+    total_m = scale_to_index(total_m, BASELINE_DATE, "Capex_Fab_Index")
+    total_m.name = "Capex_Fab_Index"
+
+    print(f"✅ Loaded Capex_Fab_Index from {csv_path}: {total_m.index.min().date()} to {total_m.index.max().date()}")
+    return total_m
+
+
+def load_dc_cost_index() -> pd.Series | None:
+    """Load datacenter construction cost index from data/raw/dc_cost_index.csv."""
+    csv_path = RAW_DIR / "dc_cost_index.csv"
+    if not csv_path.exists():
+        print(f"ℹ️ No DC cost index file at {csv_path}.")
+        return None
+
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as e:
+        print(f"⚠️ Failed to read {csv_path}: {e}")
+        return None
+
+    if "Date" not in df.columns:
+        print("⚠️ dc_cost_index.csv must contain 'Date'.")
+        return None
+
+    try:
+        df["Date"] = pd.to_datetime(df["Date"])
+    except Exception as e:
+        print(f"⚠️ Failed to parse 'Date' in dc_cost_index.csv: {e}")
+        return None
+
+    df = df.set_index("Date").sort_index()
+
+    if "Cost_Index" not in df.columns:
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if not numeric_cols:
+            print("⚠️ dc_cost_index.csv has no numeric columns.")
+            return None
+        value_col = numeric_cols[0]
+    else:
+        value_col = "Cost_Index"
+
+    s = df[value_col].copy()
+    s.name = "Capex_DC_Cost_Raw"
+
+    monthly_idx = pd.date_range(s.index.min(), s.index.max(), freq="M")
+    s_m = s.reindex(monthly_idx).ffill()
+    s_m.index.name = "Date"
+
+    s_m = scale_to_index(s_m, BASELINE_DATE, "Capex_DC_Cost_Index")
+    s_m.name = "Capex_DC_Cost_Index"
+
+    print(f"✅ Loaded Capex_DC_Cost_Index from {csv_path}: {s_m.index.min().date()} to {s_m.index.max().date()}")
+    return s_m
+
+
 def main():
     PROC_DIR.mkdir(parents=True, exist_ok=True)
 
     fred = get_fred()
-    macro_df = fetch_macro_series(fred)
 
-    if macro_df is None:
+    # 1) Core macro FRED block
+    core_df = fetch_fred_block(fred, CORE_FRED_SERIES, label="core_macro")
+    if core_df is None:
         print("⚠️ Falling back to synthetic macro capex index (constant 100).")
         idx = pd.date_range("1980-01-31", periods=12 * 10, freq="M")
         macro_index = pd.Series(100.0, index=idx, name="Capex_Macro_Comp")
     else:
-        macro_index = build_macro_capex_index(macro_df)
+        macro_index = build_macro_block_index(core_df, "Capex_Macro_Comp")
+
+    # 2) Extra macro FRED blocks (A–C) combined
+    extra_df = fetch_fred_block(fred, EXTRA_FRED_SERIES, label="extra_capex")
+    if extra_df is not None and not extra_df.empty:
+        # We'll make three composites: Semi, IT, and Constr from subsets of columns
+        semi_cols = [c for c in extra_df.columns if c.startswith("IP_") or c.startswith("CU_")]
+        it_cols   = [c for c in extra_df.columns if "Inv_InfoProc" in c or "Inv_IT" in c]
+        constr_cols = [c for c in extra_df.columns if "Priv_" in c or "Total_Constr" in c]
+
+        semi_idx = build_macro_block_index(extra_df[semi_cols], "Capex_Semi_Activity") if semi_cols else None
+        it_idx   = build_macro_block_index(extra_df[it_cols], "Capex_IT_Equip") if it_cols else None
+        constr_idx = build_macro_block_index(extra_df[constr_cols], "Capex_Constr") if constr_cols else None
+    else:
+        semi_idx = it_idx = constr_idx = None
 
     hyper_series = load_hyperscaler_capex()
+    fab_series = load_fab_capex()
+    dc_cost_series = load_dc_cost_index()
 
+    # Base DataFrame
     df = pd.DataFrame(index=macro_index.index)
     df["Capex_Macro_Comp"] = macro_index
 
-    if hyper_series is not None:
-        df = df.join(hyper_series, how="outer")
-        df["Capex_Macro_Comp"] = df["Capex_Macro_Comp"].ffill()
-        df["Capex_Hyperscaler"] = df["Capex_Hyperscaler"].ffill()
-        df["Capex_Supply"] = df[["Capex_Macro_Comp", "Capex_Hyperscaler"]].mean(axis=1)
-        print("✅ Built Capex_Supply from macro + hyperscaler components.")
+    # Add extra FRED composites if present
+    for ser in [semi_idx, it_idx, constr_idx]:
+        if ser is None or ser.empty:
+            continue
+        name = ser.name
+        df = df.join(ser, how="outer")
+        df[name] = df[name].ffill()
+
+    # Add other components
+    for ser in [hyper_series, fab_series, dc_cost_series]:
+        if ser is None or ser.empty:
+            continue
+        name = ser.name
+        df = df.join(ser, how="outer")
+        df[name] = df[name].ffill()
+
+    # Build Capex_Supply from all available components
+    component_cols = [
+        col for col in [
+            "Capex_Macro_Comp",
+            "Capex_Semi_Activity",
+            "Capex_IT_Equip",
+            "Capex_Constr",
+            "Capex_Hyperscaler",
+            "Capex_Fab_Index",
+            "Capex_DC_Cost_Index",
+        ]
+        if col in df.columns
+    ]
+
+    if not component_cols:
+        print("⚠️ No capex components found; Capex_Supply will be NaN.")
+        df["Capex_Supply"] = np.nan
     else:
-        df["Capex_Supply"] = df["Capex_Macro_Comp"]
-        print("ℹ️ Capex_Supply uses Capex_Macro_Comp only (no hyperscaler component).")
+        df["Capex_Supply"] = df[component_cols].mean(axis=1)
+        print(f"✅ Capex_Supply built from components: {component_cols}")
 
     df = df.sort_index()
     df = df.dropna(subset=["Capex_Supply"])
