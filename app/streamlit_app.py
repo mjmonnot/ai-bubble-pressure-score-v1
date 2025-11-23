@@ -568,60 +568,145 @@ with st.expander("Capex pillar debug", expanded=False):
 # -----------------------------
 # INFRASTRUCTURE PILLAR DEBUG
 # -----------------------------
-with st.expander("Infrastructure (Infra) Pillar Debug"):
-    infra_candidates = [
-        os.path.join("data", "processed", "infra_processed.csv"),
-        os.path.join("data", "processed", "infra_macro_processed.csv"),
-    ]
+with st.expander("Infra pillar debug", expanded=False):
+    st.markdown("### Infrastructure subcomponents (diagnostic view)")
 
-    infra_path = None
-    for p in infra_candidates:
-        if os.path.exists(p):
-            infra_path = p
-            break
+    infra_path = "data/processed/infra_processed.csv"
 
-    if infra_path is None:
-        st.info("No infra_processed.csv or infra_macro_processed.csv found.")
+    if not os.path.exists(infra_path):
+        st.warning(f"`{infra_path}` not found. Run the update-data workflow first.")
     else:
-        st.write(f"Using file: `{infra_path}`")
-
-        infra = pd.read_csv(infra_path, index_col=0, parse_dates=True).sort_index()
-        infra.index.name = "date"
-
-        st.write("Tail of Infra processed data:")
-        st.dataframe(infra.tail(10))
-
-        # Identify columns related to Infra
-        infra_cols = [c for c in infra.columns if "Infra" in c]
-
-        # Fallback: plot all numeric columns
-        if not infra_cols:
-            infra_cols = infra.select_dtypes(include="number").columns.tolist()
-
-        if infra_cols:
-            infra_long = (
-                infra[infra_cols]
-                .reset_index()
-                .melt(id_vars="date", var_name="Series", value_name="Value")
-                .dropna(subset=["Value"])
+        try:
+            infra_df = (
+                pd.read_csv(infra_path, parse_dates=["Date"])
+                .set_index("Date")
+                .sort_index()
             )
+        except Exception as e:
+            st.error(f"Failed to read `{infra_path}`: {e}")
+            infra_df = None
 
-            infra_chart = (
-                alt.Chart(infra_long)
-                .mark_line()
-                .encode(
-                    x="date:T",
-                    y="Value:Q",
-                    color="Series:N",
-                    tooltip=["date:T", "Series:N", "Value:Q"]
-                )
-                .properties(height=260)
-                .interactive()
-            )
-
-            st.altair_chart(infra_chart, use_container_width=True)
+        if infra_df is None or infra_df.empty:
+            st.info("infra_processed.csv is empty.")
         else:
-            st.info("No numeric Infra columns to plot.")
+            infra_cols = [c for c in infra_df.columns if c.startswith("Infra_") and c not in ["Infra", "Infra_Supply"]]
+            if not infra_cols:
+                st.info("No Infra_* subcomponent columns found in infra_processed.csv.")
+            else:
+                default_selection = infra_cols
+                selected_cols = st.multiselect(
+                    "Select Infra components to display",
+                    options=infra_cols,
+                    default=default_selection,
+                    help="Includes Infra_Power_Grid, Infra_Construction, Infra_Semi_Equip, Infra_Materials.",
+                )
+
+                if not selected_cols:
+                    st.warning("Select at least one Infra component to view.")
+                else:
+                    # Raw tail for numeric sanity
+                    st.markdown("**Latest 12 months — raw Infra indices (baseline ≈ 100)**")
+                    st.dataframe(infra_df[selected_cols].tail(12))
+
+                    # Visual 0–100 normalization per component for charts
+                    vis_df = infra_df[selected_cols].copy()
+                    for col in vis_df.columns:
+                        col_min = vis_df[col].min()
+                        col_max = vis_df[col].max()
+                        if pd.isna(col_min) or pd.isna(col_max) or col_min == col_max:
+                            vis_df[col] = 50.0
+                        else:
+                            vis_df[col] = 100.0 * (vis_df[col] - col_min) / (col_max - col_min)
+
+                    vis_long = (
+                        vis_df
+                        .reset_index(names="date")
+                        .melt(id_vars="date", var_name="Component", value_name="Value")
+                    )
+
+                    infra_ts = (
+                        alt.Chart(vis_long)
+                        .mark_line()
+                        .encode(
+                            x=alt.X("date:T", title="Date"),
+                            y=alt.Y(
+                                "Value:Q",
+                                title="Visual index (0–100 per component)",
+                                scale=alt.Scale(domain=[0, 100]),
+                            ),
+                            color=alt.Color("Component:N", title="Infra Component"),
+                            tooltip=[
+                                alt.Tooltip("date:T", title="Date"),
+                                alt.Tooltip("Component:N", title="Component"),
+                                alt.Tooltip(
+                                    "Value:Q",
+                                    title="Visual index (0–100)",
+                                    format=".1f",
+                                ),
+                            ],
+                        )
+                        .properties(
+                            height=260,
+                            title="Infra components over time (visually normalized per series)",
+                        )
+                    )
+                    st.altair_chart(infra_ts, use_container_width=True)
+
+                    # Current-date visual contribution snapshot
+                    latest_idx = vis_df.dropna(how="all").index.max()
+                    if pd.isna(latest_idx):
+                        st.info("No valid recent data to compute current Infra contributions.")
+                    else:
+                        latest_vis = vis_df.loc[latest_idx, selected_cols].dropna()
+                        if latest_vis.empty:
+                            st.info("Latest row has no non-missing Infra values (visual).")
+                        else:
+                            contrib_df = (
+                                latest_vis.reset_index()
+                                .rename(columns={"index": "Component", latest_idx: "Value"})
+                            )
+                            contrib_df["Component"] = contrib_df["Component"].astype(str)
+
+                            st.markdown(
+                                f"**Current Infra contributions (visual scale)** "
+                                f"(as of `{latest_idx.date()}`, 0–100 per component)"
+                            )
+
+                            infra_bar = (
+                                alt.Chart(contrib_df)
+                                .mark_bar()
+                                .encode(
+                                    x=alt.X(
+                                        "Component:N",
+                                        title="Infra Component",
+                                        sort="-y",
+                                    ),
+                                    y=alt.Y(
+                                        "Value:Q",
+                                        title="Visual index (0–100)",
+                                        scale=alt.Scale(domain=[0, 100]),
+                                    ),
+                                    tooltip=[
+                                        alt.Tooltip("Component:N", title="Component"),
+                                        alt.Tooltip(
+                                            "Value:Q",
+                                            title="Visual index (0–100)",
+                                            format=".1f",
+                                        ),
+                                    ],
+                                )
+                                .properties(height=260)
+                            )
+
+                            st.altair_chart(infra_bar, use_container_width=True)
+
+                            top_comp = contrib_df.sort_values("Value", ascending=False).iloc[0]
+                            st.caption(
+                                "Visual-only: each Infra component is rescaled to 0–100 over its own history. "
+                                f"At the latest date, the relatively strongest component (within this visual scale) "
+                                f"is **{top_comp['Component']}** (~{top_comp['Value']:.1f}/100)."
+                            )
+
 
 # -----------------------------
 # ADOPTION PILLAR DEBUG
