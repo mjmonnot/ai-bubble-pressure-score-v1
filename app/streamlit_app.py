@@ -728,58 +728,64 @@ with st.expander("Infra pillar debug", expanded=False):
 # -----------------------------
 # ADOPTION PILLAR DEBUG
 # -----------------------------
-with st.expander("Adoption Pillar Debug"):
-    adoption_candidates = [
-        os.path.join("data", "processed", "adoption_processed.csv"),
-        os.path.join("data", "processed", "adoption_macro_processed.csv"),
-    ]
+# ----- Adoption sub-pillar trajectories -----
+st.subheader("Adoption sub-pillar trajectories")
 
-    adoption_path = None
-    for p in adoption_candidates:
-        if os.path.exists(p):
-            adoption_path = p
-            break
+adopt_path = "data/processed/adoption_processed.csv"
 
-    if adoption_path is None:
-        st.info("No adoption_processed.csv or adoption_macro_processed.csv found.")
+if not os.path.exists(adopt_path):
+    st.info(f"`{adopt_path}` not found. Run the update-data workflow first.")
+else:
+    try:
+        adopt_df = (
+            pd.read_csv(adopt_path, parse_dates=["Date"])
+            .set_index("Date")
+            .sort_index()
+        )
+    except Exception as e:
+        st.error(f"Failed to read `{adopt_path}`: {e}")
+        adopt_df = None
+
+    if adopt_df is None or adopt_df.empty:
+        st.info("adoption_processed.csv is empty.")
     else:
-        st.write(f"Using file: `{adoption_path}`")
+        # Only *true* subcomponents – skip the composites
+        sub_cols = [
+            c for c in adopt_df.columns
+            if c.startswith("Adoption_")
+            and c not in ["Adoption", "Adoption_Supply"]
+        ]
 
-        ad = pd.read_csv(adoption_path, index_col=0, parse_dates=True).sort_index()
-        ad.index.name = "date"
-
-        st.write("Tail of Adoption processed data:")
-        st.dataframe(ad.tail(10))
-
-        # Try to identify adoption-related columns
-        ad_cols = [c for c in ad.columns if "Adoption" in c or c.lower().startswith("adopt")]
-        if not ad_cols:
-            ad_cols = ad.select_dtypes(include="number").columns.tolist()
-
-        if ad_cols:
-            ad_long = (
-                ad[ad_cols]
-                .reset_index()
-                .melt(id_vars="date", var_name="Series", value_name="Value")
-                .dropna(subset=["Value"])
+        if not sub_cols:
+            st.info("No Adoption_* subcomponent columns found (excluding Adoption / Adoption_Supply).")
+        else:
+            ad_traj = (
+                adopt_df[sub_cols]
+                .reset_index(names="date")
+                .melt(id_vars="date", var_name="Component", value_name="Value")
             )
 
-            ad_chart = (
-                alt.Chart(ad_long)
+            ad_traj_chart = (
+                alt.Chart(ad_traj)
                 .mark_line()
                 .encode(
                     x=alt.X("date:T", title="Date"),
-                    y=alt.Y("Value:Q", title="Value (mixed units / indexes)"),
-                    color="Series:N",
-                    tooltip=["date:T", "Series:N", "Value:Q"],
+                    y=alt.Y(
+                        "Value:Q",
+                        title="Adoption sub-pillar index (2015 ≈ 100)",
+                    ),
+                    color=alt.Color("Component:N", title="Adoption Component"),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date"),
+                        alt.Tooltip("Component:N", title="Component"),
+                        alt.Tooltip("Value:Q", title="Index", format=".1f"),
+                    ],
                 )
                 .properties(height=260)
-                .interactive()
             )
 
-            st.altair_chart(ad_chart, use_container_width=True)
-        else:
-            st.info("No numeric Adoption columns to plot.")
+            st.altair_chart(ad_traj_chart, use_container_width=True)
+
 
 # -----------------------------
 # SENTIMENT PILLAR DEBUG
