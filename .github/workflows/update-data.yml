@@ -65,11 +65,22 @@ jobs:
             echo "infra_processed.csv missing"
           fi
 
-      - name: Fetch adoption data
+      # ----- ADOPTION (FRED) -----
+      - name: Fetch adoption (FRED)
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
           python src/aibps/fetch_adoption.py
+
+      - name: Sanity print adoption tail
+        run: |
           echo "---- TAIL: data/processed/adoption_processed.csv ----"
-          tail -n 10 data/processed/adoption_processed.csv || true
+          if [ -f data/processed/adoption_processed.csv ]; then
+            tail -n 10 data/processed/adoption_processed.csv
+          else
+            echo "adoption_processed.csv missing"
+          fi
+
 
       - name: Fetch sentiment data
         run: |
