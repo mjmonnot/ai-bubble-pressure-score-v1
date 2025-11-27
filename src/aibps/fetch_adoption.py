@@ -13,16 +13,19 @@ Sub-pillars (block composites):
         * IPB541   – Industrial Production: Data Processing, Hosting, and Related Services
         * AIPDC    – Private fixed investment: Data processing equipment
         * TLHICS   – Private fixed investment: Computers & peripheral equipment
+      (currently failing: FRED reports these IDs as non-existent; block will be empty.)
 
     - Adoption_Digital_Labor
         * PRS85006092 – Nonfinancial corporate sector output per hour
         * ULCBS       – Unit labor costs: Business sector
-        * IPN11110    – Industrial Production: Computing & Electronic Products
+        * IPN11110    – Industrial Production: Computing & Electronics
+      (IPN11110 currently failing; the first two work.)
 
     - Adoption_Connectivity
         * IPN323        – Industrial Production: Communications equipment
-        * IPN2211       – Industrial Production: Electric power transmission & distribution equipment
+        * IPN2211       – Electric power equipment & distribution
         * CES1020000001 – Employment: Telecommunications
+      (currently failing: FRED reports these IDs as non-existent; block will be empty.)
 
 Output:
     data/processed/adoption_processed.csv with columns:
@@ -60,23 +63,23 @@ ENTERPRISE_SERIES = [
 
 # 2) Cloud / data-processing / hosting
 CLOUD_SERIES = [
-    ("IPB541",  "Cloud_Hosting_Production"),   # Industrial Production: data processing & hosting
-    ("AIPDC",   "Cloud_DataProcessing_Equip"), # Private fixed investment: data-processing equipment
-    ("TLHICS",  "Cloud_IT_Comp_Equip"),        # Investment: computers & peripheral equipment
+    ("IPB541",  "Cloud_Hosting_Production"),   # (currently failing)
+    ("AIPDC",   "Cloud_DataProcessing_Equip"), # (currently failing)
+    ("TLHICS",  "Cloud_IT_Comp_Equip"),        # (currently failing)
 ]
 
 # 3) Digital labor / automation-related
 DIGITAL_LABOR_SERIES = [
-    ("PRS85006092", "Labor_Productivity"),     # Nonfinancial corporate output per hour
-    ("ULCBS",       "Unit_Labor_Costs"),       # Unit labor costs: business sector
-    ("IPN11110",    "Comp_Electronics_Prod"),  # Industrial Prod: computing & electronics
+    ("PRS85006092", "Labor_Productivity"),
+    ("ULCBS",       "Unit_Labor_Costs"),
+    ("IPN11110",    "Comp_Electronics_Prod"),  # (currently failing)
 ]
 
 # 4) Connectivity / telecom / power backbone
 CONNECTIVITY_SERIES = [
-    ("IPN323",        "Comm_Equipment_Prod"),   # Industrial Prod: communications equipment
-    ("IPN2211",       "Electric_Power_Equip"),  # Electric power equipment & distribution
-    ("CES1020000001", "Telecom_Employment"),    # Employment: telecommunications
+    ("IPN323",        "Comm_Equipment_Prod"),   # (currently failing)
+    ("IPN2211",       "Electric_Power_Equip"),  # (currently failing)
+    ("CES1020000001", "Telecom_Employment"),    # (currently failing)
 ]
 
 
@@ -157,22 +160,25 @@ def block_to_composite(df_block: pd.DataFrame, out_name: str) -> pd.Series:
 
 def reindex_monthly(df: pd.DataFrame, start_date: str) -> pd.DataFrame:
     """
-    Reindex a DataFrame to a monthly Date index starting at start_date,
-    using forward-fill for gaps.
+    Resample an irregular-frequency DataFrame to month-end, forward-fill, and
+    then trim to dates >= start_date.
+
+    This avoids the bug where we reindexed to a brand-new monthly index that
+    never included the original observation dates (e.g., Jan 1 vs Jan 31),
+    which caused all-NaN series.
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
     df = df.sort_index()
-    last_date = df.index.max()
-    if pd.isna(last_date):
-        return pd.DataFrame()
+    # Resample to month-end and forward-fill
+    monthly = df.resample("M").last().ffill()
 
-    monthly_idx = pd.date_range(start_date, last_date, freq="M")
-    out = df.reindex(monthly_idx)
-    out.index.name = "Date"
-    out = out.ffill()
-    return out
+    # Restrict to dates >= start_date
+    start_ts = pd.to_datetime(start_date)
+    monthly = monthly[monthly.index >= start_ts]
+    monthly.index.name = "Date"
+    return monthly
 
 
 # ---------------------------------------------------------------------
@@ -197,10 +203,10 @@ def main() -> int:
         return 0
 
     # ---- Fetch blocks ----
-    ent_block   = fetch_series_block(fred, ENTERPRISE_SERIES,   "Enterprise_Software")
-    cloud_block = fetch_series_block(fred, CLOUD_SERIES,        "Cloud_Services")
+    ent_block   = fetch_series_block(fred, ENTERPRISE_SERIES,    "Enterprise_Software")
+    cloud_block = fetch_series_block(fred, CLOUD_SERIES,         "Cloud_Services")
     labor_block = fetch_series_block(fred, DIGITAL_LABOR_SERIES, "Digital_Labor")
-    conn_block  = fetch_series_block(fred, CONNECTIVITY_SERIES, "Connectivity")
+    conn_block  = fetch_series_block(fred, CONNECTIVITY_SERIES,  "Connectivity")
 
     # ---- Build composites ----
     ent_idx   = block_to_composite(ent_block,   "Adoption_Enterprise_Software")
