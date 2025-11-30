@@ -205,9 +205,7 @@ It provides an empirical basis for discussions about “AI bubbles” rather tha
 
 ---
 
-# 📝 10. References (APA Style)
-
-## 📚 References (APA 7th Edition)
+# 📝 10. References 
 
 Borio, C., Drehmann, M., & Xia, F. D. (2018). The financial cycle and recession risk. *BIS Quarterly Review* (December 2018). https://www.bis.org/publ/qtrpdf/r_qt1812g.htm
 
