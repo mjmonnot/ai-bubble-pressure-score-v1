@@ -8,7 +8,6 @@ import altair as alt
 # ---------- Paths & constants ----------
 PROC_PATH = os.path.join("data", "processed", "aibps_monthly.csv")
 
-# The pillars we conceptually care about
 PILLAR_CANDIDATES = [
     "Market",
     "Credit",
@@ -36,28 +35,27 @@ if not os.path.exists(PROC_PATH):
     st.stop()
 
 df = pd.read_csv(PROC_PATH, index_col=0, parse_dates=True).sort_index()
+
 if df.empty:
     st.error("Composite file is empty. Check workflows / processed inputs.")
     st.stop()
 
-# Force all visualizations to start from 1980
 MIN_DATE = pd.Timestamp("1980-01-01")
 df = df[df.index >= MIN_DATE]
+
 if df.empty:
     st.error("No composite data available from 1980 onward.")
     st.stop()
 
-
 df.index.name = "date"
 
-# Figure out which of our six conceptual pillars actually exist
 available_pillars = [p for p in PILLAR_CANDIDATES if p in df.columns]
 
 if not available_pillars:
     st.error("None of the expected pillars are present in the composite file.")
     st.stop()
 
-# ---------- Sidebar: weights & options ----------
+# ---------- Sidebar ----------
 with st.sidebar:
     st.header("Pillar Weights")
 
@@ -77,8 +75,10 @@ with st.sidebar:
         )
 
     w_vec = np.array([weight_inputs[p] for p in available_pillars], dtype=float)
+
     if w_vec.sum() == 0:
         w_vec = np.ones_like(w_vec)
+
     w_vec = w_vec / w_vec.sum()
     weights = pd.Series(w_vec, index=available_pillars)
 
@@ -102,15 +102,12 @@ with st.sidebar:
         index=0,
     )
 
-# ---------- Prepare composite (in-app and/or precomputed) ----------
-
+# ---------- Prepare composite ----------
 pillars_df = df[available_pillars].copy()
 
-# In-app composite from pillar weights
 comp_in_app_raw = (pillars_df * weights).sum(axis=1)
 comp_in_app_ra = comp_in_app_raw.rolling(3, min_periods=1).mean()
 
-# Precomputed composite from CSV (if present)
 precomp_raw = df["AIBPS"] if "AIBPS" in df.columns else None
 precomp_ra = df["AIBPS_RA"] if "AIBPS_RA" in df.columns else None
 
@@ -154,17 +151,19 @@ latest_val = comp_df.loc[latest_comp_date, "Composite"]
 latest_str = latest_comp_date.strftime("%Y-%m-%d")
 
 col_a, col_b, col_c = st.columns(3)
+
 with col_a:
     st.metric("Latest reading", f"{latest_val:.1f}")
+
 with col_b:
     st.metric("As of", latest_str)
+
 with col_c:
     st.write(f"Source: {composite_source}")
 
 st.markdown("---")
 
-# ---------- Composite chart: bands + regime lines + bubble markers ----------
-
+# ---------- Composite chart ----------
 st.subheader("AI Bubble Pressure Score over time")
 
 df_plot = comp_df.reset_index().rename(columns={"index": "date"})
@@ -207,15 +206,12 @@ bands = (
     )
 )
 
-# Horizontal regime threshold lines at 25/50/75
 thresholds_df = pd.DataFrame({"y": [25, 50, 75]})
 
 regime_rules = (
     alt.Chart(thresholds_df)
     .mark_rule(strokeDash=[3, 3], color="black", opacity=0.5)
-    .encode(
-        y="y:Q",
-    )
+    .encode(y="y:Q")
 )
 
 aibps_line = (
@@ -263,7 +259,6 @@ event_labels = (
         align="left",
         baseline="middle",
         dx=5,
-        dy=0,
         color="gray",
         fontSize=11,
     )
@@ -275,20 +270,16 @@ event_labels = (
 )
 
 composite_chart = (
-    (bands + regime_rules + aibps_line + event_rules + event_labels)
-    .properties(height=420)
-    .interactive()
-)
+    bands + regime_rules + aibps_line + event_rules + event_labels
+).properties(height=420).interactive()
 
 st.altair_chart(composite_chart, use_container_width=True)
 
-# ----- Pillar trajectories (normalized 0–100) -----
+# ---------- Pillar trajectories ----------
 st.subheader("Pillar trajectories")
 
-# df is the composite DataFrame loaded from aibps_monthly.csv
 available_cols = list(df.columns)
 
-# Map internal column names → nice labels for the chart
 pillar_map = {
     "Market": "Market",
     "Capex_Supply": "Capex / Supply",
@@ -298,7 +289,6 @@ pillar_map = {
     "Credit": "Credit",
 }
 
-# Only include pillars that actually exist in the data
 plot_cols = [col for col in pillar_map.keys() if col in available_cols]
 
 if not plot_cols:
@@ -309,7 +299,7 @@ else:
         .reset_index(names="date")
         .melt(id_vars="date", var_name="Pillar", value_name="Value")
     )
-    # Apply pretty labels
+
     traj_df["Pillar"] = traj_df["Pillar"].map(pillar_map)
 
     traj_chart = (
@@ -334,27 +324,53 @@ else:
 
     st.altair_chart(traj_chart, use_container_width=True)
 
-
-# ---------- Pillar-by-pillar debug: Market ----------
-
+# ---------- Pillar debug ----------
 st.markdown("### Pillar debug")
 
+# ---------- Market pillar debug ----------
 with st.expander("Market pillar debug"):
     mkt_path = os.path.join("data", "processed", "market_processed.csv")
+
     if not os.path.exists(mkt_path):
         st.info("market_processed.csv not found. Run the update-data workflow first.")
     else:
         mkt = pd.read_csv(mkt_path, index_col=0, parse_dates=True).sort_index()
         mkt.index.name = "date"
 
-        # Identify component columns (everything except the main Market composite)
-        comp_cols = [c for c in mkt.columns if c.startswith("Mkt_")]
-        show_cols = ["Market"] + comp_cols if "Market" in mkt.columns else comp_cols
+        lower_cols = {c: c.lower() for c in mkt.columns}
+
+        comp_cols = [
+            c for c in mkt.columns
+            if (
+                c == "Market"
+                or c.startswith("Mkt_")
+                or lower_cols[c].startswith("market_")
+                or lower_cols[c].startswith("qqq")
+                or lower_cols[c].startswith("nasdaq")
+                or lower_cols[c].startswith("sp500")
+                or lower_cols[c].startswith("vix")
+                or lower_cols[c].startswith("nvda")
+                or lower_cols[c].startswith("btc")
+                or "_qqq_" in lower_cols[c]
+                or "_nasdaq_" in lower_cols[c]
+                or "_sp500_" in lower_cols[c]
+                or "_vix_" in lower_cols[c]
+                or "_nvda_" in lower_cols[c]
+                or "_btc_" in lower_cols[c]
+            )
+        ]
+
+        numeric_cols = mkt.select_dtypes(include="number").columns.tolist()
+        show_cols = [c for c in comp_cols if c in numeric_cols]
 
         if not show_cols:
             st.info("No Market component series found to debug.")
+            st.write("Available columns in market_processed.csv:")
+            st.write(list(mkt.columns))
         else:
-            # Melt to long format for Altair
+            st.write("Detected Market component columns:")
+            st.write(show_cols)
+
             mkt_long = (
                 mkt[show_cols]
                 .reset_index()
@@ -362,19 +378,19 @@ with st.expander("Market pillar debug"):
                 .dropna(subset=["Value"])
             )
 
-            st.write("Underlying Market components (rebased to 100 at first valid point):")
+            st.write("Underlying Market components:")
 
             mkt_chart = (
                 alt.Chart(mkt_long)
                 .mark_line()
                 .encode(
                     x=alt.X("date:T", title="Date"),
-                    y=alt.Y("Value:Q", title="Index (rebased to 100)"),
+                    y=alt.Y("Value:Q", title="Value"),
                     color="Series:N",
                     tooltip=[
                         alt.Tooltip("date:T", title="Date"),
                         alt.Tooltip("Series:N", title="Series"),
-                        alt.Tooltip("Value:Q", title="Value", format=".1f"),
+                        alt.Tooltip("Value:Q", title="Value", format=".2f"),
                     ],
                 )
                 .properties(height=260)
@@ -386,10 +402,10 @@ with st.expander("Market pillar debug"):
             st.write("Tail of market_processed.csv:")
             st.dataframe(mkt.tail(10))
 
-# ---------- Pillar-by-pillar debug: Credit ----------
-
+# ---------- Credit pillar debug ----------
 with st.expander("Credit pillar debug"):
     credit_path = os.path.join("data", "processed", "credit_fred_processed.csv")
+
     if not os.path.exists(credit_path):
         st.info("credit_fred_processed.csv not found. Run the update-data workflow first.")
     else:
@@ -399,7 +415,6 @@ with st.expander("Credit pillar debug"):
         st.write("Underlying credit series (FRED):")
         st.dataframe(credit.tail(10))
 
-        # Long format for Altair
         credit_long = (
             credit.reset_index()
             .melt(id_vars="date", var_name="Series", value_name="Value")
@@ -425,14 +440,7 @@ with st.expander("Credit pillar debug"):
 
         st.altair_chart(credit_chart, use_container_width=True)
 
-# ---------- Pillar-by-pillar debug: Capex ----------
-
-# -----------------------------
-# CAPEX / SUPPLY PILLAR DEBUG
-# -----------------------------
-
-
-
+# ---------- Capex pillar debug ----------
 with st.expander("Capex pillar debug", expanded=False):
     st.markdown("### Capex subcomponents (diagnostic view)")
 
@@ -454,43 +462,36 @@ with st.expander("Capex pillar debug", expanded=False):
         if capex_df is None or capex_df.empty:
             st.info("macro_capex_processed.csv is empty.")
         else:
-            # 1) Identify all Capex-related columns in the macro capex file
             capex_cols = [c for c in capex_df.columns if c.startswith("Capex_")]
+
             if not capex_cols:
                 st.info("No Capex_* columns found in macro_capex_processed.csv.")
             else:
-                # 2) Let user choose which components to visualize
                 default_selection = [c for c in capex_cols if c != "Capex_Supply"] or capex_cols
+
                 selected_cols = st.multiselect(
                     "Select Capex components to display",
                     options=capex_cols,
                     default=default_selection,
-                    help=(
-                        "Includes Capex_Macro_Comp, Capex_Semi_Activity, Capex_IT_Equip, "
-                        "Capex_Constr, Capex_Hyperscaler, Capex_Fab_Index, "
-                        "Capex_DC_Cost_Index, Capex_Supply (composite)."
-                    ),
                 )
 
                 if not selected_cols:
                     st.warning("Select at least one Capex component to view.")
                 else:
-                    # 3) Show raw tail (true index values, baseline ~100 but can go >>100)
-                    st.markdown("**Latest 12 months — raw capex indices (baseline ≈ 100)**")
+                    st.markdown("**Latest 12 months — raw capex indices**")
                     st.dataframe(capex_df[selected_cols].tail(12))
 
-                    # 4) Build visually normalized copy (0–100 per component) for charts
                     vis_df = capex_df[selected_cols].copy()
+
                     for col in vis_df.columns:
                         col_min = vis_df[col].min()
                         col_max = vis_df[col].max()
+
                         if pd.isna(col_min) or pd.isna(col_max) or col_min == col_max:
-                            # If no variation, park it at midline so it's visible but flat
                             vis_df[col] = 50.0
                         else:
                             vis_df[col] = 100.0 * (vis_df[col] - col_min) / (col_max - col_min)
 
-                    # 5) Time-series chart (visually normalized 0–100 so all lines "alive")
                     vis_long = (
                         vis_df
                         .reset_index(names="date")
@@ -511,80 +512,15 @@ with st.expander("Capex pillar debug", expanded=False):
                             tooltip=[
                                 alt.Tooltip("date:T", title="Date"),
                                 alt.Tooltip("Component:N", title="Component"),
-                                alt.Tooltip(
-                                    "Value:Q",
-                                    title="Visual index (0–100)",
-                                    format=".1f"
-                                ),
+                                alt.Tooltip("Value:Q", title="Visual index", format=".1f"),
                             ],
                         )
-                        .properties(
-                            height=260,
-                            title="Capex components over time (visually normalized per series)",
-                        )
+                        .properties(height=260)
                     )
+
                     st.altair_chart(capex_ts, use_container_width=True)
 
-                    # 6) Current-date contribution snapshot (visually normalized bar)
-                    latest_idx = vis_df.dropna(how="all").index.max()
-                    if pd.isna(latest_idx):
-                        st.info("No valid recent data to compute current Capex contributions.")
-                    else:
-                        latest_vis = vis_df.loc[latest_idx, selected_cols].dropna()
-                        if latest_vis.empty:
-                            st.info("Latest row has no non-missing Capex values (visual).")
-                        else:
-                            contrib_df = (
-                                latest_vis.reset_index()
-                                .rename(columns={"index": "Component", latest_idx: "Value"})
-                            )
-                            contrib_df["Component"] = contrib_df["Component"].astype(str)
-
-                            st.markdown(
-                                f"**Current Capex contributions (visual scale)** "
-                                f"(as of `{latest_idx.date()}`, 0–100 per component)"
-                            )
-
-                            capex_bar = (
-                                alt.Chart(contrib_df)
-                                .mark_bar()
-                                .encode(
-                                    x=alt.X(
-                                        "Component:N",
-                                        title="Capex Component",
-                                        sort="-y",
-                                    ),
-                                    y=alt.Y(
-                                        "Value:Q",
-                                        title="Visual index (0–100)",
-                                        scale=alt.Scale(domain=[0, 100]),
-                                    ),
-                                    tooltip=[
-                                        alt.Tooltip("Component:N", title="Component"),
-                                        alt.Tooltip(
-                                            "Value:Q",
-                                            title="Visual index (0–100)",
-                                            format=".1f",
-                                        ),
-                                    ],
-                                )
-                                .properties(height=260)
-                            )
-
-                            st.altair_chart(capex_bar, use_container_width=True)
-
-                            top_comp = contrib_df.sort_values("Value", ascending=False).iloc[0]
-                            st.caption(
-                                "Visual-only: each component is rescaled to 0–100 over its own history. "
-                                f"At the latest date, the relatively strongest component (within this visual scale) "
-                                f"is **{top_comp['Component']}** (~{top_comp['Value']:.1f}/100)."
-                            )
-
-
-# -----------------------------
-# INFRASTRUCTURE PILLAR DEBUG
-# -----------------------------
-
+# ---------- Infrastructure pillar debug ----------
 with st.expander("Infra pillar debug", expanded=False):
     st.markdown("### Infrastructure subcomponents (diagnostic view)")
 
@@ -606,30 +542,32 @@ with st.expander("Infra pillar debug", expanded=False):
         if infra_df is None or infra_df.empty:
             st.info("infra_processed.csv is empty.")
         else:
-            infra_cols = [c for c in infra_df.columns if c.startswith("Infra_") and c not in ["Infra", "Infra_Supply"]]
+            infra_cols = [
+                c for c in infra_df.columns
+                if c.startswith("Infra_") and c not in ["Infra", "Infra_Supply"]
+            ]
+
             if not infra_cols:
                 st.info("No Infra_* subcomponent columns found in infra_processed.csv.")
             else:
-                default_selection = infra_cols
                 selected_cols = st.multiselect(
                     "Select Infra components to display",
                     options=infra_cols,
-                    default=default_selection,
-                    help="Includes Infra_Power_Grid, Infra_Construction, Infra_Semi_Equip, Infra_Materials.",
+                    default=infra_cols,
                 )
 
                 if not selected_cols:
                     st.warning("Select at least one Infra component to view.")
                 else:
-                    # Raw tail for numeric sanity
-                    st.markdown("**Latest 12 months — raw Infra indices (baseline ≈ 100)**")
+                    st.markdown("**Latest 12 months — raw Infra indices**")
                     st.dataframe(infra_df[selected_cols].tail(12))
 
-                    # Visual 0–100 normalization per component for charts
                     vis_df = infra_df[selected_cols].copy()
+
                     for col in vis_df.columns:
                         col_min = vis_df[col].min()
                         col_max = vis_df[col].max()
+
                         if pd.isna(col_min) or pd.isna(col_max) or col_min == col_max:
                             vis_df[col] = 50.0
                         else:
@@ -655,76 +593,15 @@ with st.expander("Infra pillar debug", expanded=False):
                             tooltip=[
                                 alt.Tooltip("date:T", title="Date"),
                                 alt.Tooltip("Component:N", title="Component"),
-                                alt.Tooltip(
-                                    "Value:Q",
-                                    title="Visual index (0–100)",
-                                    format=".1f",
-                                ),
+                                alt.Tooltip("Value:Q", title="Visual index", format=".1f"),
                             ],
                         )
-                        .properties(
-                            height=260,
-                            title="Infra components over time (visually normalized per series)",
-                        )
+                        .properties(height=260)
                     )
+
                     st.altair_chart(infra_ts, use_container_width=True)
 
-                    # Current-date visual contribution snapshot
-                    latest_idx = vis_df.dropna(how="all").index.max()
-                    if pd.isna(latest_idx):
-                        st.info("No valid recent data to compute current Infra contributions.")
-                    else:
-                        latest_vis = vis_df.loc[latest_idx, selected_cols].dropna()
-                        if latest_vis.empty:
-                            st.info("Latest row has no non-missing Infra values (visual).")
-                        else:
-                            contrib_df = (
-                                latest_vis.reset_index()
-                                .rename(columns={"index": "Component", latest_idx: "Value"})
-                            )
-                            contrib_df["Component"] = contrib_df["Component"].astype(str)
-
-                            st.markdown(
-                                f"**Current Infra contributions (visual scale)** "
-                                f"(as of `{latest_idx.date()}`, 0–100 per component)"
-                            )
-
-                            infra_bar = (
-                                alt.Chart(contrib_df)
-                                .mark_bar()
-                                .encode(
-                                    x=alt.X(
-                                        "Component:N",
-                                        title="Infra Component",
-                                        sort="-y",
-                                    ),
-                                    y=alt.Y(
-                                        "Value:Q",
-                                        title="Visual index (0–100)",
-                                        scale=alt.Scale(domain=[0, 100]),
-                                    ),
-                                    tooltip=[
-                                        alt.Tooltip("Component:N", title="Component"),
-                                        alt.Tooltip(
-                                            "Value:Q",
-                                            title="Visual index (0–100)",
-                                            format=".1f",
-                                        ),
-                                    ],
-                                )
-                                .properties(height=260)
-                            )
-
-                            st.altair_chart(infra_bar, use_container_width=True)
-
-                            top_comp = contrib_df.sort_values("Value", ascending=False).iloc[0]
-                            st.caption(
-                                "Visual-only: each Infra component is rescaled to 0–100 over its own history. "
-                                f"At the latest date, the relatively strongest component (within this visual scale) "
-                                f"is **{top_comp['Component']}** (~{top_comp['Value']:.1f}/100)."
-                            )
-
-# ----- Adoption pillar debug -----
+# ---------- Adoption pillar debug ----------
 with st.expander("Adoption pillar debug", expanded=False):
     st.markdown("### Adoption subcomponents (diagnostic view)")
 
@@ -746,43 +623,33 @@ with st.expander("Adoption pillar debug", expanded=False):
         if adopt_df is None or adopt_df.empty:
             st.info("adoption_processed.csv is empty.")
         else:
-            # Only *true* subcomponents – skip the composites
             sub_cols = [
-                c
-                for c in adopt_df.columns
+                c for c in adopt_df.columns
                 if c.startswith("Adoption_")
                 and c not in ["Adoption", "Adoption_Supply"]
             ]
 
             if not sub_cols:
-                st.info(
-                    "No Adoption_* subcomponent columns found "
-                    "(excluding Adoption / Adoption_Supply)."
-                )
+                st.info("No Adoption_* subcomponent columns found.")
             else:
                 selected_cols = st.multiselect(
                     "Select Adoption components to display",
                     options=sub_cols,
                     default=sub_cols,
-                    help=(
-                        "Includes Adoption_Enterprise_Software, "
-                        "Adoption_Cloud_Services, Adoption_Digital_Labor, "
-                        "Adoption_Connectivity (when available)."
-                    ),
                 )
 
                 if not selected_cols:
                     st.warning("Select at least one Adoption component to view.")
                 else:
-                    # Raw tail for numeric sanity
-                    st.markdown("**Latest 12 months — raw Adoption indices (2015 ≈ 100)**")
+                    st.markdown("**Latest 12 months — raw Adoption indices**")
                     st.dataframe(adopt_df[selected_cols].tail(12))
 
-                    # Visual 0–100 normalization per component (for readability)
                     vis_df = adopt_df[selected_cols].copy()
+
                     for col in vis_df.columns:
                         col_min = vis_df[col].min()
                         col_max = vis_df[col].max()
+
                         if pd.isna(col_min) or pd.isna(col_max) or col_min == col_max:
                             vis_df[col] = 50.0
                         else:
@@ -807,90 +674,15 @@ with st.expander("Adoption pillar debug", expanded=False):
                             tooltip=[
                                 alt.Tooltip("date:T", title="Date"),
                                 alt.Tooltip("Component:N", title="Component"),
-                                alt.Tooltip(
-                                    "Value:Q",
-                                    title="Visual index (0–100)",
-                                    format=".1f",
-                                ),
+                                alt.Tooltip("Value:Q", title="Visual index", format=".1f"),
                             ],
                         )
-                        .properties(
-                            height=260,
-                            title="Adoption components over time (visually normalized per series)",
-                        )
+                        .properties(height=260)
                     )
+
                     st.altair_chart(ad_ts, use_container_width=True)
 
-                    # Current-date visual contribution snapshot
-                    latest_idx = vis_df.dropna(how="all").index.max()
-                    if pd.isna(latest_idx):
-                        st.info(
-                            "No valid recent data to compute current Adoption contributions."
-                        )
-                    else:
-                        latest_vis = vis_df.loc[latest_idx, selected_cols].dropna()
-                        if latest_vis.empty:
-                            st.info(
-                                "Latest row has no non-missing Adoption values (visual)."
-                            )
-                        else:
-                            contrib_df = (
-                                latest_vis.reset_index()
-                                .rename(
-                                    columns={
-                                        "index": "Component",
-                                        latest_idx: "Value",
-                                    }
-                                )
-                            )
-                            contrib_df["Component"] = contrib_df["Component"].astype(str)
-
-                            st.markdown(
-                                f"**Current Adoption contributions (visual scale)** "
-                                f"(as of `{latest_idx.date()}`, 0–100 per component)"
-                            )
-
-                            ad_bar = (
-                                alt.Chart(contrib_df)
-                                .mark_bar()
-                                .encode(
-                                    x=alt.X(
-                                        "Component:N",
-                                        title="Adoption Component",
-                                        sort="-y",
-                                    ),
-                                    y=alt.Y(
-                                        "Value:Q",
-                                        title="Visual index (0–100)",
-                                        scale=alt.Scale(domain=[0, 100]),
-                                    ),
-                                    tooltip=[
-                                        alt.Tooltip("Component:N", title="Component"),
-                                        alt.Tooltip(
-                                            "Value:Q",
-                                            title="Visual index (0–100)",
-                                            format=".1f",
-                                        ),
-                                    ],
-                                )
-                                .properties(height=260)
-                            )
-
-                            st.altair_chart(ad_bar, use_container_width=True)
-
-                            top_comp = contrib_df.sort_values(
-                                "Value", ascending=False
-                            ).iloc[0]
-                            st.caption(
-                                "Visual-only: each Adoption component is rescaled to 0–100 over its own history. "
-                                f"At the latest date, the relatively strongest component (within this visual scale) "
-                                f"is **{top_comp['Component']}** (~{top_comp['Value']:.1f}/100)."
-                            )
-
-
-# -----------------------------
-# SENTIMENT PILLAR DEBUG
-# -----------------------------
+# ---------- Sentiment pillar debug ----------
 with st.expander("Sentiment Pillar Debug"):
     sentiment_candidates = [
         os.path.join("data", "processed", "sentiment_processed.csv"),
@@ -898,6 +690,7 @@ with st.expander("Sentiment Pillar Debug"):
     ]
 
     sentiment_path = None
+
     for p in sentiment_candidates:
         if os.path.exists(p):
             sentiment_path = p
@@ -914,8 +707,8 @@ with st.expander("Sentiment Pillar Debug"):
         st.write("Tail of Sentiment processed data:")
         st.dataframe(sent.tail(10))
 
-        # Try to identify sentiment-related columns
         sent_cols = [c for c in sent.columns if "Sentiment" in c or "Hype" in c]
+
         if not sent_cols:
             sent_cols = sent.select_dtypes(include="number").columns.tolist()
 
@@ -932,7 +725,7 @@ with st.expander("Sentiment Pillar Debug"):
                 .mark_line()
                 .encode(
                     x=alt.X("date:T", title="Date"),
-                    y=alt.Y("Value:Q", title="Value (mixed units / indexes)"),
+                    y=alt.Y("Value:Q", title="Value"),
                     color="Series:N",
                     tooltip=["date:T", "Series:N", "Value:Q"],
                 )
@@ -944,9 +737,9 @@ with st.expander("Sentiment Pillar Debug"):
         else:
             st.info("No numeric Sentiment columns to plot.")
 
-
-
 # ---------- Footer ----------
 st.markdown("---")
 updated_str = df.index.max().strftime("%Y-%m-%d")
-st.caption(f"Data through {updated_str}. AIBPS is an experimental composite indicator and may be revised.")
+st.caption(
+    f"Data through {updated_str}. AIBPS is an experimental composite indicator and may be revised."
+)
