@@ -1,110 +1,149 @@
-# src/aibps/fetch_market.py
-from __future__ import annotations
+"""
+fetch_market.py
+
+Downloads market series used in the AI Bubble Pressure Score (AIBPS)
+and converts them into monthly frequency data.
+
+Fixes:
+- pandas >=2.2 deprecates/removes "M" frequency alias
+- uses "ME" (month end) instead
+- safer handling of Series/DataFrame returns from yfinance
+- explicit datetime index handling
+"""
 
 from pathlib import Path
-from typing import List
 
-import numpy as np
 import pandas as pd
 import yfinance as yf
 
-DATA_DIR = Path("data")
-RAW_OUT = DATA_DIR / "raw" / "market_prices.csv"
-PROC_OUT = DATA_DIR / "processed" / "market_processed.csv"
+# ---------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------
 
-# Go back to your birth year 🙂
-START = "1980-01-01"
+START = "2000-01-01"
 
-# Broad + growth/speculative proxies
-# ^GSPC: S&P 500
-# ^IXIC: Nasdaq Composite
-# ^NDX : Nasdaq 100
-# QQQ  : Nasdaq 100 ETF
-# ARKK : High-spec innovation ETF
-TICKERS: List[str] = ["^GSPC", "^IXIC", "^NDX", "QQQ", "ARKK"]
+TICKERS = {
+    "SP500": "^GSPC",
+    "NASDAQ": "^IXIC",
+    "VIX": "^VIX",
+    "NVDA": "NVDA",
+    "BTC": "BTC-USD",
+}
+
+RAW_DIR = Path("data/raw")
+PROC_DIR = Path("data/processed")
+
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+PROC_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _fetch_one(ticker: str, start: str) -> pd.Series | None:
-    """Fetch one ticker's adjusted close as a monthly series."""
-    try:
-        df = yf.download(ticker, start=start, auto_adjust=True, progress=False)
-    except Exception as e:
-        print(f"⚠️ yfinance exception for {ticker}: {e}")
-        return None
+# ---------------------------------------------------------------------
+# FETCH ONE SERIES
+# ---------------------------------------------------------------------
 
-    if df is None or df.empty or "Close" not in df.columns:
-        print(f"⚠️ Empty/invalid data for {ticker}; skipping.")
-        return None
+def _fetch_one(ticker: str, start: str) -> pd.Series:
+    """
+    Download one ticker from Yahoo Finance and convert to
+    month-end frequency.
+    """
 
-    s = df["Close"].copy()
+    df = yf.download(
+        ticker,
+        start=start,
+        auto_adjust=True,
+        progress=False,
+    )
+
+    if df.empty:
+        raise ValueError(f"No data returned for ticker: {ticker}")
+
+    # yfinance sometimes returns DataFrame columns with multi-index
+    # or a single-column DataFrame
+    if "Close" in df.columns:
+        s = df["Close"]
+    else:
+        # fallback to first numeric column
+        s = df.select_dtypes(include="number").iloc[:, 0]
+
+    # ensure Series
+    if isinstance(s, pd.DataFrame):
+        s = s.iloc[:, 0]
+
+    # clean index
     s.index = pd.to_datetime(s.index)
-    s.index.name = "date"
+    s = s.sort_index()
 
-    # Monthly: last close of each month
-    s = s.resample("M").last().dropna()
+    # IMPORTANT:
+    # pandas >=2.2 removed "M"
+    # use "ME" (month-end) instead
+    s = s.resample("ME").last().dropna()
 
-    if s.empty:
-        print(f"⚠️ No monthly data for {ticker} after resample; skipping.")
-        return None
-
-    s.name = ticker
     return s
 
 
-def _rebase_100(s: pd.Series) -> pd.Series:
-    s = s.sort_index()
-    if not s.notna().any():
-        return s * np.nan
-    first = s.dropna().iloc[0]
-    if not np.isfinite(first) or first == 0:
-        return s * np.nan
-    return (s / first) * 100.0
-
+# ---------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------
 
 def main():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    RAW_OUT.parent.mkdir(parents=True, exist_ok=True)
-    PROC_OUT.parent.mkdir(parents=True, exist_ok=True)
 
-    frames: List[pd.Series] = []
-    for t in TICKERS:
-        s = _fetch_one(t, START)
-        if s is not None:
-            frames.append(s)
+    series_list = []
 
-    if not frames:
-        print("❌ No market series fetched; aborting.")
-        return
+    for name, ticker in TICKERS.items():
 
-    # Wide panel of monthly levels
-    wide = pd.concat(frames, axis=1).sort_index()
-    wide.index.name = "date"
+        print(f"Fetching {name} ({ticker})...")
 
-    # Persist raw multi-ticker panel for reference/debug
-    wide.to_csv(RAW_OUT)
-    print(f"💾 Wrote {RAW_OUT} with columns: {list(wide.columns)}")
-    print(f"   Date span: {wide.index.min().date()} → {wide.index.max().date()}")
+        try:
+            s = _fetch_one(ticker, START)
 
-    # Rebase each series to 100 at its own first valid point
-    rebased = wide.apply(_rebase_100)
-    # Give friendly column names for debug
-    rename_map = {col: f"Mkt_{col.replace('^', '')}_idx" for col in rebased.columns}
-    rebased = rebased.rename(columns=rename_map)
+            df = pd.DataFrame({
+                "Date": s.index,
+                name: s.values,
+            })
 
-    # Equal-weight composite of all rebased series
-    market_eqw = rebased.mean(axis=1, skipna=True).rename("Market")
+            df = df.set_index("Date")
 
-    # Output: composite + underlying rebased components
-    out = pd.concat([market_eqw, rebased], axis=1).dropna(how="all")
-    out.index.name = "date"
+            series_list.append(df)
 
-    print("---- Market composite tail (rebased EW) ----")
-    print(out[["Market"]].tail(6))
-    print(f"✅ Market composite span: {out.index.min().date()} → {out.index.max().date()}")
+            print(f"  OK: {len(df)} rows")
 
-    out.to_csv(PROC_OUT)
-    print(f"💾 Wrote {PROC_OUT} (rows={len(out)}) with columns: {list(out.columns)}")
+        except Exception as e:
+            print(f"  FAILED: {e}")
 
+    if not series_list:
+        raise RuntimeError("No market series downloaded successfully.")
+
+    # combine all series
+    market = pd.concat(series_list, axis=1)
+
+    # ensure datetime index
+    market.index = pd.to_datetime(market.index)
+    market.index.name = "Date"
+
+    # sort
+    market = market.sort_index()
+
+    # save raw
+    raw_path = RAW_DIR / "market_prices.csv"
+    market.to_csv(raw_path)
+
+    # simple processed version
+    processed = market.copy()
+
+    proc_path = PROC_DIR / "market_processed.csv"
+    processed.to_csv(proc_path)
+
+    print("\nSaved:")
+    print(f"  Raw:       {raw_path}")
+    print(f"  Processed: {proc_path}")
+
+    print("\nTail:")
+    print(processed.tail())
+
+
+# ---------------------------------------------------------------------
+# ENTRY
+# ---------------------------------------------------------------------
 
 if __name__ == "__main__":
     main()
