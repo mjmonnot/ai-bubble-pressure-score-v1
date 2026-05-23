@@ -365,42 +365,100 @@ with st.expander("Market pillar debug"):
 
         if not show_cols:
             st.info("No Market component series found to debug.")
-            st.write("Available columns in market_processed.csv:")
-            st.write(list(mkt.columns))
+            with st.expander("Available market_processed.csv columns"):
+                st.write(list(mkt.columns))
         else:
-            st.write("Detected Market component columns:")
-            st.write(show_cols)
+            label_map = {
+                "SP500": "S&P 500",
+                "NASDAQ": "NASDAQ",
+                "QQQ": "QQQ",
+                "VIX": "VIX",
+                "NVDA": "NVIDIA",
+                "BTC": "Bitcoin",
+                "market_component_composite_z": "Composite Market Pressure",
+            }
+
+            summary_labels = []
+            for c in show_cols:
+                if c in label_map:
+                    summary_labels.append(label_map[c])
+
+            summary_labels = list(dict.fromkeys(summary_labels))
+
+            if summary_labels:
+                st.caption("Market components detected: " + ", ".join(summary_labels))
+
+            preferred_candidates = [
+                "SP500",
+                "NASDAQ",
+                "QQQ",
+                "VIX",
+                "NVDA",
+                "BTC",
+                "market_component_composite_z",
+            ]
+
+            preferred_plot_cols = [c for c in preferred_candidates if c in show_cols]
+
+            if not preferred_plot_cols:
+                preferred_plot_cols = show_cols[:8]
+
+            plot_df = mkt[preferred_plot_cols].copy()
+
+            for col in plot_df.columns:
+                if col in ["SP500", "NASDAQ", "QQQ", "VIX", "NVDA", "BTC"]:
+                    first_valid = plot_df[col].dropna()
+
+                    if not first_valid.empty:
+                        base = first_valid.iloc[0]
+
+                        if pd.notna(base) and base != 0:
+                            plot_df[col] = (plot_df[col] / base) * 100.0
 
             mkt_long = (
-                mkt[show_cols]
+                plot_df
                 .reset_index()
                 .melt(id_vars="date", var_name="Series", value_name="Value")
                 .dropna(subset=["Value"])
             )
 
-            st.write("Underlying Market components:")
+            pretty_series_map = {
+                "SP500": "S&P 500",
+                "NASDAQ": "NASDAQ",
+                "QQQ": "QQQ",
+                "VIX": "VIX",
+                "NVDA": "NVIDIA",
+                "BTC": "Bitcoin",
+                "market_component_composite_z": "Composite Pressure",
+            }
+
+            mkt_long["Series"] = mkt_long["Series"].map(
+                lambda x: pretty_series_map.get(x, x)
+            )
+
+            st.write("Underlying Market components, rebased where applicable:")
 
             mkt_chart = (
                 alt.Chart(mkt_long)
                 .mark_line()
                 .encode(
                     x=alt.X("date:T", title="Date"),
-                    y=alt.Y("Value:Q", title="Value"),
-                    color="Series:N",
+                    y=alt.Y("Value:Q", title="Index / Signal"),
+                    color=alt.Color("Series:N", title="Market Component"),
                     tooltip=[
                         alt.Tooltip("date:T", title="Date"),
                         alt.Tooltip("Series:N", title="Series"),
                         alt.Tooltip("Value:Q", title="Value", format=".2f"),
                     ],
                 )
-                .properties(height=260)
+                .properties(height=300)
                 .interactive()
             )
 
             st.altair_chart(mkt_chart, use_container_width=True)
 
-            st.write("Tail of market_processed.csv:")
-            st.dataframe(mkt.tail(10))
+            with st.expander("Raw market_processed.csv tail"):
+                st.dataframe(mkt.tail(10))
 
 # ---------- Credit pillar debug ----------
 with st.expander("Credit pillar debug"):
