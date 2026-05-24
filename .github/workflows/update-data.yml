@@ -1,35 +1,30 @@
-name: Update data
+name: update-data
 
 on:
-  # Nightly run at 06:00 UTC
+  workflow_dispatch:
   schedule:
     - cron: "0 6 * * *"
-  # Manual trigger
-  workflow_dispatch:
 
-# Prevent overlapping runs that race to push to main
-concurrency:
-  group: update-data-main
-  cancel-in-progress: true
-
-# Required so the workflow can push commits back to the repo
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHON_VERSION: "3.11"
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -39,105 +34,27 @@ jobs:
       - name: Fetch market data
         run: |
           python src/aibps/fetch_market.py
-          echo "---- TAIL: data/processed/market_processed.csv ----"
-          tail -n 10 data/processed/market_processed.csv || true
 
-      - name: Fetch credit (FRED)
+      - name: Fetch credit data
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
           python src/aibps/fetch_credit.py
-          echo "---- TAIL: data/processed/credit_fred_processed.csv ----"
-          tail -n 10 data/processed/credit_fred_processed.csv || true
 
-      - name: Fetch macro + hyperscaler capex
-        env:
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: |
-          python src/aibps/fetch_macro_capex.py
-          echo "---- TAIL: data/processed/macro_capex_processed.csv ----"
-          tail -n 10 data/processed/macro_capex_processed.csv || true
-
-      # ----- INFRASTRUCTURE (FRED) -----
-      - name: Fetch infrastructure (FRED)
-        env:
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: |
-          python src/aibps/fetch_infra.py
-
-      - name: Sanity print infra tail
-        run: |
-          echo "---- TAIL: data/processed/infra_processed.csv ----"
-          if [ -f data/processed/infra_processed.csv ]; then
-            tail -n 10 data/processed/infra_processed.csv
-          else
-            echo "infra_processed.csv missing"
-          fi
-
-      # ----- ADOPTION (FRED) -----
-      - name: Fetch adoption (FRED)
-        env:
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: |
-          python src/aibps/fetch_adoption.py
-
-      - name: Sanity print adoption tail
-        run: |
-          echo "---- TAIL: data/processed/adoption_processed.csv ----"
-          if [ -f data/processed/adoption_processed.csv ]; then
-            tail -n 10 data/processed/adoption_processed.csv
-          else
-            echo "adoption_processed.csv missing"
-          fi
-
-      - name: Fetch sentiment (FRED)
-        env:
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: |
-          python src/aibps/fetch_sentiment.py
-          echo "---- TAIL: data/processed/sentiment_processed.csv ----"
-          tail -n 15 data/processed/sentiment_processed.csv || true
-
-      - name: Compute composite AIBPS
+      - name: Compute AIBPS monthly composite
         run: |
           python src/aibps/compute.py
-          echo "---- TAIL: data/processed/aibps_monthly.csv ----"
-          tail -n 10 data/processed/aibps_monthly.csv || true
 
-      - name: Commit and push updated data
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit updated data files
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
 
-          echo "---- git status (before add) ----"
-          git status
-
-          # Add only CSVs in data/processed and data/raw
-          git add data/processed/*.csv data/raw/*.csv 2>/dev/null || true
+          git add data/raw/*.csv data/processed/*.csv || true
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+            echo "No data changes to commit."
+          else
+            git commit -m "Update AIBPS data"
+            git push
           fi
-
-          git commit -m "Auto-update data (${GITHUB_RUN_ID})"
-
-          # Sync with latest main, then push (retry to avoid races)
-          for i in 1 2 3 4 5; do
-            echo "---- fetch + rebase (attempt $i) ----"
-            git fetch origin main
-            git rebase origin/main || (git rebase --abort && exit 1)
-
-            if git push; then
-              echo "Push succeeded."
-              exit 0
-            fi
-
-            echo "Push rejected (race). Retrying..."
-            sleep 5
-          done
-
-          echo "Push failed after retries."
-          exit 1
