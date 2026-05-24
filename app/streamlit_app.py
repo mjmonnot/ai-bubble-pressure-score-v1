@@ -337,31 +337,19 @@ with st.expander("Market pillar debug"):
         mkt = pd.read_csv(mkt_path, index_col=0, parse_dates=True).sort_index()
         mkt.index.name = "date"
 
-        lower_cols = {c: c.lower() for c in mkt.columns}
+        numeric_cols = mkt.select_dtypes(include="number").columns.tolist()
 
-        comp_cols = [
-            c for c in mkt.columns
-            if (
-                c == "Market"
-                or c.startswith("Mkt_")
-                or lower_cols[c].startswith("market_")
-                or lower_cols[c].startswith("qqq")
-                or lower_cols[c].startswith("nasdaq")
-                or lower_cols[c].startswith("sp500")
-                or lower_cols[c].startswith("vix")
-                or lower_cols[c].startswith("nvda")
-                or lower_cols[c].startswith("btc")
-                or "_qqq_" in lower_cols[c]
-                or "_nasdaq_" in lower_cols[c]
-                or "_sp500_" in lower_cols[c]
-                or "_vix_" in lower_cols[c]
-                or "_nvda_" in lower_cols[c]
-                or "_btc_" in lower_cols[c]
-            )
+        preferred_candidates = [
+            "SP500",
+            "NASDAQ",
+            "QQQ",
+            "VIX",
+            "NVDA",
+            "BTC",
+            "market_component_composite_z",
         ]
 
-        numeric_cols = mkt.select_dtypes(include="number").columns.tolist()
-        show_cols = [c for c in comp_cols if c in numeric_cols]
+        show_cols = [c for c in preferred_candidates if c in numeric_cols]
 
         if not show_cols:
             st.info("No Market component series found to debug.")
@@ -378,77 +366,50 @@ with st.expander("Market pillar debug"):
                 "market_component_composite_z": "Composite Market Pressure",
             }
 
-            summary_labels = []
-            for c in show_cols:
-                if c in label_map:
-                    summary_labels.append(label_map[c])
+            summary_labels = [label_map.get(c, c) for c in show_cols]
+            st.caption("Market components detected: " + ", ".join(summary_labels))
 
-            summary_labels = list(dict.fromkeys(summary_labels))
+            plot_df = mkt[show_cols].copy()
 
-            if summary_labels:
-                st.caption("Market components detected: " + ", ".join(summary_labels))
+            # Visual-only normalization:
+            # each series gets its own 0–100 scale so NVDA does not swamp the others.
+            vis_df = plot_df.copy()
 
-            preferred_candidates = [
-                "SP500",
-                "NASDAQ",
-                "QQQ",
-                "VIX",
-                "NVDA",
-                "BTC",
-                "market_component_composite_z",
-            ]
+            for col in vis_df.columns:
+                col_min = vis_df[col].min(skipna=True)
+                col_max = vis_df[col].max(skipna=True)
 
-            preferred_plot_cols = [c for c in preferred_candidates if c in show_cols]
+                if pd.isna(col_min) or pd.isna(col_max) or col_min == col_max:
+                    vis_df[col] = np.nan
+                else:
+                    vis_df[col] = 100.0 * (vis_df[col] - col_min) / (col_max - col_min)
 
-            if not preferred_plot_cols:
-                preferred_plot_cols = show_cols[:8]
-
-            plot_df = mkt[preferred_plot_cols].copy()
-
-            for col in plot_df.columns:
-                if col in ["SP500", "NASDAQ", "QQQ", "VIX", "NVDA", "BTC"]:
-                    first_valid = plot_df[col].dropna()
-
-                    if not first_valid.empty:
-                        base = first_valid.iloc[0]
-
-                        if pd.notna(base) and base != 0:
-                            plot_df[col] = (plot_df[col] / base) * 100.0
-
-            mkt_long = (
-                plot_df
+            vis_long = (
+                vis_df
                 .reset_index()
                 .melt(id_vars="date", var_name="Series", value_name="Value")
                 .dropna(subset=["Value"])
             )
 
-            pretty_series_map = {
-                "SP500": "S&P 500",
-                "NASDAQ": "NASDAQ",
-                "QQQ": "QQQ",
-                "VIX": "VIX",
-                "NVDA": "NVIDIA",
-                "BTC": "Bitcoin",
-                "market_component_composite_z": "Composite Pressure",
-            }
+            vis_long["Series"] = vis_long["Series"].map(lambda x: label_map.get(x, x))
 
-            mkt_long["Series"] = mkt_long["Series"].map(
-                lambda x: pretty_series_map.get(x, x)
-            )
-
-            st.write("Underlying Market components, rebased where applicable:")
+            st.write("Market components, visually normalized to 0–100 per series:")
 
             mkt_chart = (
-                alt.Chart(mkt_long)
+                alt.Chart(vis_long)
                 .mark_line()
                 .encode(
                     x=alt.X("date:T", title="Date"),
-                    y=alt.Y("Value:Q", title="Index / Signal"),
+                    y=alt.Y(
+                        "Value:Q",
+                        title="Visual index (0–100 per series)",
+                        scale=alt.Scale(domain=[0, 100]),
+                    ),
                     color=alt.Color("Series:N", title="Market Component"),
                     tooltip=[
                         alt.Tooltip("date:T", title="Date"),
                         alt.Tooltip("Series:N", title="Series"),
-                        alt.Tooltip("Value:Q", title="Value", format=".2f"),
+                        alt.Tooltip("Value:Q", title="Visual index", format=".1f"),
                     ],
                 )
                 .properties(height=300)
@@ -456,6 +417,12 @@ with st.expander("Market pillar debug"):
             )
 
             st.altair_chart(mkt_chart, use_container_width=True)
+
+            st.caption(
+                "Visual-only: each market component is independently rescaled to 0–100 "
+                "over its available history. This prevents high-growth series such as NVIDIA "
+                "from visually flattening broader indexes like NASDAQ, QQQ, or S&P 500."
+            )
 
             with st.expander("Raw market_processed.csv tail"):
                 st.dataframe(mkt.tail(10))
