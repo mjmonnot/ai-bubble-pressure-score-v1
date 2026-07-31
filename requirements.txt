@@ -7,9 +7,10 @@ yfinance>=0.2.54
 fredapi>=0.5.2
 requests>=2.31
 python-dotenv>=1.0
+urllib3>=1.26,<2
 
 streamlit>=1.30.0,<2.0
 altair>=5,<7
 
 sec-edgar-downloader>=5.0
-pytrends>=4.9
+pytrends>=4.9.2

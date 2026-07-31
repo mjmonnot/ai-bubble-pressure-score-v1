@@ -65,7 +65,7 @@ jobs:
         run: |
           python src/aibps/fetch_adoption.py
 
-      - name: Fetch sentiment data
+      - name: Fetch sentiment data (Trends + Wiki + FRED)
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |

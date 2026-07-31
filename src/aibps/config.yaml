@@ -49,6 +49,15 @@ indicators:
     source: manual_cloud
     transform: percentile
 
+  - id: Google_Trends_AI_Basket
+    pillar: Sentiment
+    source: pytrends
+    transform: rolling_z_sigmoid
+  - id: Wikipedia_AI_Pageviews
+    pillar: Sentiment
+    source: wikimedia_pageviews
+    transform: rolling_z_sigmoid
+
   - id: HY_OAS
     pillar: Credit
     source: fred
