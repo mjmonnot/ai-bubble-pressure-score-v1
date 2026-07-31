@@ -39,6 +39,10 @@ CONFIG_PATH = os.path.join(HERE, "config.yaml")
 
 CANONICAL_PILLARS = ["Market", "Credit", "Capex_Supply", "Infra", "Adoption", "Sentiment"]
 
+# Publish AIBPS only when enough pillars have reported for that month.
+# Incomplete recent months (FRED lag) otherwise bias the equal-weight mean downward.
+MIN_PILLARS_FOR_AIBPS = 5
+
 
 def _read_processed(filename: str) -> pd.DataFrame | None:
     path = os.path.join(PROC_DIR, filename)
@@ -347,15 +351,32 @@ def main():
     composite = weighted_sum / total_w
     composite[total_w == 0] = np.nan
 
-    # Require at least 2 pillars to define AIBPS
+    # Freeze publication until enough pillars report (see docs/methods.md)
     num_pillars_available = vals.notna().sum(axis=1)
-    composite[num_pillars_available < 2] = np.nan
+    composite[num_pillars_available < MIN_PILLARS_FOR_AIBPS] = np.nan
 
+    base["Pillars_reporting"] = num_pillars_available
     base["AIBPS"] = composite
-    # Docs specify ~6-month smoothing; keep min_periods=1 for early history
+    # Docs specify ~6-month smoothing; keep min_periods=1 for early history.
+    # RA is also blank on frozen months so the live edge does not drift without AIBPS.
     base["AIBPS_RA"] = base["AIBPS"].rolling(6, min_periods=1).mean()
+    base.loc[num_pillars_available < MIN_PILLARS_FOR_AIBPS, "AIBPS_RA"] = np.nan
 
-    out = base.dropna(subset=["AIBPS"], how="all")
+    # Keep diagnostic pillar rows even when AIBPS is frozen/blank
+    keep_cols = [c for c in CANONICAL_PILLARS if c in base.columns] + ["AIBPS"]
+    out = base.dropna(subset=keep_cols, how="all")
+
+    frozen_tail = int((num_pillars_available < MIN_PILLARS_FOR_AIBPS).tail(6).sum())
+    print(
+        f"ℹ️ Publication rule: AIBPS requires ≥{MIN_PILLARS_FOR_AIBPS} pillars; "
+        f"frozen months in last 6={frozen_tail}"
+    )
+    published = out.dropna(subset=["AIBPS"])
+    if len(published):
+        print(
+            f"ℹ️ Latest published AIBPS month: {published.index.max().date()} "
+            f"(pillars={int(published['Pillars_reporting'].iloc[-1])})"
+        )
 
     print("---- Columns in composite ----")
     print(list(out.columns))

@@ -121,12 +121,23 @@ Let each pillar _p_ be normalized to 0–100.
 **AIBPS(t) = Σ [ weight_p * pillar_p(t) ]**
 
 Defaults: **equal weights (1/6 each)**  
-Changeable in `config.yaml` or Streamlit UI.
+Changeable in `config.yaml` or Streamlit UI.  
+Weights are renormalized over the pillars that are non-missing in month _t_.
 
 The system also computes:
 
 - **AIBPS_RA** → rolling 6-month smoothing  
 - **z-intensity metrics** (internal)
+- **Pillars_reporting** → count of non-missing pillars in month _t_
+
+### Publication freeze (minimum pillar coverage)
+
+AIBPS is **not published** for a month until at least **5 of 6 pillars** have reported.
+
+- If `Pillars_reporting(t) < 5`, `AIBPS(t)` and `AIBPS_RA(t)` are left blank (the series is frozen at the last complete month).
+- This prevents a false cliff at the live edge of the sample, when slower FRED-based pillars (Capex, Infra, Adoption) lag market/credit/sentiment by one or more months.
+- Incomplete months still retain pillar-level values in `aibps_monthly.csv` for diagnostics; only the composite is withheld.
+- Once the fifth pillar arrives in a later data refresh, that month’s AIBPS is filled in automatically.
 
 ---
 
@@ -150,7 +161,7 @@ It shows **relative pressure**, not future performance.
 
 - AI-capex data is partly manual until APIs exist  
 - Cloud/connectivity adoption proxies still incomplete  
-- Sentiment is macro, not AI-specific  
+- Recent months may be unpublished until Capex/Infra/Adoption catch up (≥5-pillar rule)  
 - Normalization window selection affects sensitivity  
 - Equal weighting may not reflect actual economic influence  
 

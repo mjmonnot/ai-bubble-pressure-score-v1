@@ -103,10 +103,22 @@ with st.sidebar:
     )
 
 # ---------- Prepare composite ----------
+# Match compute.py: withhold composite until ≥5 pillars report for that month
+MIN_PILLARS_FOR_AIBPS = 5
 pillars_df = df[available_pillars].copy()
+pillars_reporting = pillars_df.notna().sum(axis=1)
 
-comp_in_app_raw = (pillars_df * weights).sum(axis=1)
-comp_in_app_ra = comp_in_app_raw.rolling(3, min_periods=1).mean()
+# Renormalize slider weights over available pillars, then freeze thin months
+w_matrix = pd.DataFrame(
+    {p: float(weights[p]) for p in available_pillars},
+    index=pillars_df.index,
+)
+w_eff = w_matrix.where(pillars_df.notna())
+w_sum = w_eff.sum(axis=1).replace(0, np.nan)
+comp_in_app_raw = (pillars_df * w_eff).sum(axis=1, skipna=True) / w_sum
+comp_in_app_raw = comp_in_app_raw.where(pillars_reporting >= MIN_PILLARS_FOR_AIBPS)
+comp_in_app_ra = comp_in_app_raw.rolling(6, min_periods=1).mean()
+comp_in_app_ra = comp_in_app_ra.where(pillars_reporting >= MIN_PILLARS_FOR_AIBPS)
 
 precomp_raw = df["AIBPS"] if "AIBPS" in df.columns else None
 precomp_ra = df["AIBPS_RA"] if "AIBPS_RA" in df.columns else None
@@ -160,6 +172,15 @@ with col_b:
 
 with col_c:
     st.write(f"Source: {composite_source}")
+
+latest_raw_date = df.index.max()
+latest_raw_n = int(pillars_reporting.loc[latest_raw_date]) if latest_raw_date in pillars_reporting.index else 0
+if latest_raw_date > latest_comp_date or latest_raw_n < MIN_PILLARS_FOR_AIBPS:
+    st.caption(
+        f"Composite frozen at last month with ≥{MIN_PILLARS_FOR_AIBPS} pillars reporting. "
+        f"Newest data month {latest_raw_date.strftime('%Y-%m')} has {latest_raw_n}/6 pillars "
+        f"(see docs/methods.md)."
+    )
 
 st.markdown("---")
 
