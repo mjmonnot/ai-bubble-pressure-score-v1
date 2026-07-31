@@ -1,0 +1,17 @@
+---
+description: Preserve AIBPS historical boom peaks as a regression sanity check
+alwaysApply: true
+---
+
+# AIBPS historical boom sanity check
+
+When changing AIBPS methodology, pillar wiring, normalization, or composite assembly:
+
+1. After recomputing, confirm **AIBPS_RA** still peaks in expected boom/stress windows:
+   - Dot-com (~early 2000)
+   - Housing / pre-GFC (~2006–2007)
+   - Lehman / GFC (~2008)
+   - Current AI boom (2023–present)
+2. If peaks wash out, the series becomes permanently elevated/flat, or maxima drift far from those windows: **stop, double-check, and prefer reverting** instead of stacking more transforms.
+3. `compute.py` prints these window maxima; `docs/methods.md` documents the rule.
+4. Sentiment v2 (Trends + Wiki) is intentional; do not reintroduce Capex/Infra/Market wiring changes that previously destroyed this variance without explicit user approval and a passing boom check.

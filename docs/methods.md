@@ -150,6 +150,23 @@ It shows **relative pressure**, not future performance.
 
 ---
 
+## ✅ Historical boom sanity check
+
+Before accepting methodology, wiring, or normalization changes, verify that **AIBPS_RA** still shows elevated peaks in the known boom / stress windows:
+
+| Episode | Approximate window | Expectation |
+|---------|--------------------|-------------|
+| Dot-com | 1999–2001 | Clear peak near early 2000 |
+| Housing / pre-GFC | 2005–2008 | Elevated peak(s) into 2006–2007 |
+| Lehman / GFC | 2008–2009 | Elevated reading around the crisis |
+| AI boom (current) | 2023–present | Elevated late-sample peak |
+
+**Rule of thumb:** if a change washes out these peaks, flattens the series into a permanently “high” band, or moves boom maxima far from those windows, **stop, double-check the work, and prefer reverting** rather than “fixing forward” with more transforms.
+
+`compute.py` prints these window maxima after each recompute as a quick regression check.
+
+---
+
 ## 🧱 6. Limitations
 
 - AI-capex data is partly manual until APIs exist  

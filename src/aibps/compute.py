@@ -308,6 +308,28 @@ def main():
     for col in ["Market", "Capex_Supply", "Infra", "Credit", "AIBPS_RA"]:
         _safe_tail(col)
 
+    # ---- Historical boom sanity check (see docs/methods.md) ----
+    # If peaks wash out or drift away from these windows after a change,
+    # double-check and consider reverting.
+    boom_windows = [
+        ("dot-com", "1999-01-01", "2001-06-30"),
+        ("housing/pre-GFC", "2005-01-01", "2008-06-30"),
+        ("Lehman/GFC", "2008-01-01", "2009-06-30"),
+        ("AI boom", "2023-01-01", "2100-01-01"),
+    ]
+    ra = out["AIBPS_RA"] if "AIBPS_RA" in out.columns else out["AIBPS"]
+    print("---- Boom sanity check (AIBPS_RA maxima) ----")
+    for name, start, end in boom_windows:
+        window = ra.loc[start:end].dropna()
+        if window.empty:
+            print(f"  {name}: no data in {start[:7]}–{end[:7]}")
+        else:
+            peak_dt = window.idxmax()
+            print(
+                f"  {name}: max={float(window.max()):.1f} @ {peak_dt.date()} "
+                f"(mean={float(window.mean()):.1f})"
+            )
+
     # ---- Write out ----
     os.makedirs(PROC_DIR, exist_ok=True)
     out.to_csv(OUT_PATH)
