@@ -130,14 +130,16 @@ The system also computes:
 - **z-intensity metrics** (internal)
 - **Pillars_reporting** → count of non-missing pillars in month _t_
 
-### Publication freeze (minimum pillar coverage)
+### Publication freeze (live edge only)
 
-AIBPS is **not published** for a month until at least **5 of 6 pillars** have reported.
+To avoid a false cliff when slow FRED pillars lag, the **most recent 4 months** are published only when at least **5 of 6 pillars** have reported.
 
-- If `Pillars_reporting(t) < 5`, `AIBPS(t)` and `AIBPS_RA(t)` are left blank (the series is frozen at the last complete month).
-- This prevents a false cliff at the live edge of the sample, when slower FRED-based pillars (Capex, Infra, Adoption) lag market/credit/sentiment by one or more months.
-- Incomplete months still retain pillar-level values in `aibps_monthly.csv` for diagnostics; only the composite is withheld.
-- Once the fifth pillar arrives in a later data refresh, that month’s AIBPS is filled in automatically.
+- **Historical months** (everything before that live window): publish AIBPS when ≥ **2** pillars are available — preserving the long-run chart and regime comparisons.
+- **Live edge** (last 4 months of the sample): if `Pillars_reporting(t) < 5`, `AIBPS(t)` and `AIBPS_RA(t)` are left blank and the headline reading stays on the last sufficiently complete month.
+- Incomplete live-edge months still retain pillar-level values in `aibps_monthly.csv` for diagnostics.
+- Once Capex/Infra/Adoption catch up in a later refresh, the frozen month is filled in automatically.
+
+This rule is intentionally **not** applied to the full history: requiring 5 pillars back through time would truncate early decades (before Sentiment and other series exist) and distort the demonstrated long-run path.
 
 ---
 
@@ -161,7 +163,7 @@ It shows **relative pressure**, not future performance.
 
 - AI-capex data is partly manual until APIs exist  
 - Cloud/connectivity adoption proxies still incomplete  
-- Recent months may be unpublished until Capex/Infra/Adoption catch up (≥5-pillar rule)  
+- The latest few months may be unpublished until Capex/Infra/Adoption catch up (live-edge ≥5-pillar rule)  
 - Normalization window selection affects sensitivity  
 - Equal weighting may not reflect actual economic influence  
 

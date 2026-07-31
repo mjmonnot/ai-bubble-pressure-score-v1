@@ -103,12 +103,21 @@ with st.sidebar:
     )
 
 # ---------- Prepare composite ----------
-# Match compute.py: withhold composite until ≥5 pillars report for that month
-MIN_PILLARS_FOR_AIBPS = 5
+# Match compute.py: ≥2 pillars historically; ≥5 only on the live edge
+MIN_PILLARS_HISTORICAL = 2
+MIN_PILLARS_LIVE_EDGE = 5
+LIVE_EDGE_MONTHS = 4
+
 pillars_df = df[available_pillars].copy()
 pillars_reporting = pillars_df.notna().sum(axis=1)
 
-# Renormalize slider weights over available pillars, then freeze thin months
+end_m = pd.Timestamp(pillars_df.index.max()).to_period("M").to_timestamp("M")
+live_start = (end_m.to_period("M") - (LIVE_EDGE_MONTHS - 1)).to_timestamp("M")
+min_required = pd.Series(MIN_PILLARS_HISTORICAL, index=pillars_df.index, dtype=int)
+min_required.loc[pillars_df.index >= live_start] = MIN_PILLARS_LIVE_EDGE
+publish_mask = pillars_reporting >= min_required
+
+# Renormalize slider weights over available pillars, then apply live-edge freeze
 w_matrix = pd.DataFrame(
     {p: float(weights[p]) for p in available_pillars},
     index=pillars_df.index,
@@ -116,9 +125,9 @@ w_matrix = pd.DataFrame(
 w_eff = w_matrix.where(pillars_df.notna())
 w_sum = w_eff.sum(axis=1).replace(0, np.nan)
 comp_in_app_raw = (pillars_df * w_eff).sum(axis=1, skipna=True) / w_sum
-comp_in_app_raw = comp_in_app_raw.where(pillars_reporting >= MIN_PILLARS_FOR_AIBPS)
+comp_in_app_raw = comp_in_app_raw.where(publish_mask)
 comp_in_app_ra = comp_in_app_raw.rolling(6, min_periods=1).mean()
-comp_in_app_ra = comp_in_app_ra.where(pillars_reporting >= MIN_PILLARS_FOR_AIBPS)
+comp_in_app_ra = comp_in_app_ra.where(publish_mask)
 
 precomp_raw = df["AIBPS"] if "AIBPS" in df.columns else None
 precomp_ra = df["AIBPS_RA"] if "AIBPS_RA" in df.columns else None
@@ -157,6 +166,13 @@ if plot_series.startswith("Rolling"):
 else:
     comp_df["Composite"] = comp_df["Composite_raw"]
 
+# Drop blank composite points so the chart domain matches the visible series
+comp_df = comp_df.dropna(subset=["Composite"])
+
+if comp_df.empty:
+    st.error("Composite series is empty after applying the publication rule.")
+    st.stop()
+
 # ---------- Top summary ----------
 latest_comp_date = comp_df.index.max()
 latest_val = comp_df.loc[latest_comp_date, "Composite"]
@@ -175,11 +191,12 @@ with col_c:
 
 latest_raw_date = df.index.max()
 latest_raw_n = int(pillars_reporting.loc[latest_raw_date]) if latest_raw_date in pillars_reporting.index else 0
-if latest_raw_date > latest_comp_date or latest_raw_n < MIN_PILLARS_FOR_AIBPS:
+if latest_raw_date > latest_comp_date and latest_raw_n < MIN_PILLARS_LIVE_EDGE:
     st.caption(
-        f"Composite frozen at last month with ≥{MIN_PILLARS_FOR_AIBPS} pillars reporting. "
-        f"Newest data month {latest_raw_date.strftime('%Y-%m')} has {latest_raw_n}/6 pillars "
-        f"(see docs/methods.md)."
+        f"Live edge frozen: newest month {latest_raw_date.strftime('%Y-%m')} has "
+        f"{latest_raw_n}/6 pillars (need ≥{MIN_PILLARS_LIVE_EDGE} in the last "
+        f"{LIVE_EDGE_MONTHS} months). Historical series still uses ≥{MIN_PILLARS_HISTORICAL} "
+        f"pillars (see docs/methods.md)."
     )
 
 st.markdown("---")
@@ -261,6 +278,10 @@ event_data = pd.DataFrame(
         {"date": pd.Timestamp("2023-03-15"), "label": "AI boom", "ypos": 68},
     ]
 )
+# Keep event markers inside the composite span so they do not pad empty years
+event_data = event_data[
+    (event_data["date"] >= x_min) & (event_data["date"] <= x_max)
+]
 
 event_rules = (
     alt.Chart(event_data)

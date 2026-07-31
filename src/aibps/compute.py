@@ -39,9 +39,22 @@ CONFIG_PATH = os.path.join(HERE, "config.yaml")
 
 CANONICAL_PILLARS = ["Market", "Credit", "Capex_Supply", "Infra", "Adoption", "Sentiment"]
 
-# Publish AIBPS only when enough pillars have reported for that month.
-# Incomplete recent months (FRED lag) otherwise bias the equal-weight mean downward.
-MIN_PILLARS_FOR_AIBPS = 5
+# Historical months: keep long-run chart continuity (≥2 pillars, as before).
+# Live edge only: require ≥5 pillars so FRED reporting lag cannot cliff the latest print.
+MIN_PILLARS_HISTORICAL = 2
+MIN_PILLARS_LIVE_EDGE = 5
+LIVE_EDGE_MONTHS = 4
+
+
+def _min_pillars_by_date(index: pd.DatetimeIndex) -> pd.Series:
+    """Stricter coverage only for the most recent LIVE_EDGE_MONTHS."""
+    if len(index) == 0:
+        return pd.Series(dtype=float)
+    end = pd.Timestamp(index.max()).to_period("M").to_timestamp("M")
+    live_start = (end.to_period("M") - (LIVE_EDGE_MONTHS - 1)).to_timestamp("M")
+    required = pd.Series(MIN_PILLARS_HISTORICAL, index=index, dtype=int)
+    required.loc[index >= live_start] = MIN_PILLARS_LIVE_EDGE
+    return required
 
 
 def _read_processed(filename: str) -> pd.DataFrame | None:
@@ -351,31 +364,34 @@ def main():
     composite = weighted_sum / total_w
     composite[total_w == 0] = np.nan
 
-    # Freeze publication until enough pillars report (see docs/methods.md)
+    # Coverage rule: ≥2 historically; ≥5 only on the live edge (see docs/methods.md)
     num_pillars_available = vals.notna().sum(axis=1)
-    composite[num_pillars_available < MIN_PILLARS_FOR_AIBPS] = np.nan
+    min_required = _min_pillars_by_date(base.index)
+    publish_mask = num_pillars_available >= min_required
+    composite = composite.where(publish_mask)
 
     base["Pillars_reporting"] = num_pillars_available
     base["AIBPS"] = composite
     # Docs specify ~6-month smoothing; keep min_periods=1 for early history.
-    # RA is also blank on frozen months so the live edge does not drift without AIBPS.
+    # RA follows the same live-edge freeze so the latest point cannot drift alone.
     base["AIBPS_RA"] = base["AIBPS"].rolling(6, min_periods=1).mean()
-    base.loc[num_pillars_available < MIN_PILLARS_FOR_AIBPS, "AIBPS_RA"] = np.nan
+    base.loc[~publish_mask, "AIBPS_RA"] = np.nan
 
-    # Keep diagnostic pillar rows even when AIBPS is frozen/blank
+    # Keep diagnostic pillar rows even when AIBPS is frozen/blank at the live edge
     keep_cols = [c for c in CANONICAL_PILLARS if c in base.columns] + ["AIBPS"]
     out = base.dropna(subset=keep_cols, how="all")
 
-    frozen_tail = int((num_pillars_available < MIN_PILLARS_FOR_AIBPS).tail(6).sum())
+    live_frozen = int((~publish_mask & (min_required >= MIN_PILLARS_LIVE_EDGE)).sum())
     print(
-        f"ℹ️ Publication rule: AIBPS requires ≥{MIN_PILLARS_FOR_AIBPS} pillars; "
-        f"frozen months in last 6={frozen_tail}"
+        f"ℹ️ Publication rule: ≥{MIN_PILLARS_HISTORICAL} pillars historically; "
+        f"≥{MIN_PILLARS_LIVE_EDGE} in last {LIVE_EDGE_MONTHS} months "
+        f"(live-edge frozen months={live_frozen})"
     )
     published = out.dropna(subset=["AIBPS"])
     if len(published):
         print(
-            f"ℹ️ Latest published AIBPS month: {published.index.max().date()} "
-            f"(pillars={int(published['Pillars_reporting'].iloc[-1])})"
+            f"ℹ️ AIBPS span: {published.index.min().date()} → {published.index.max().date()} "
+            f"(latest pillars={int(published['Pillars_reporting'].iloc[-1])})"
         )
 
     print("---- Columns in composite ----")
