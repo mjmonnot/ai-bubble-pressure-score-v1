@@ -394,6 +394,9 @@ def main():
         df["Capex_Supply"] = df[component_cols].mean(axis=1)
         print(f"✅ Capex_Supply built from components: {component_cols}")
 
+    # Alias expected by older compute joins / docs
+    df["Capex_Supply_Macro"] = df["Capex_Supply"]
+
     df = df.sort_index()
     df = df.dropna(subset=["Capex_Supply"])
 

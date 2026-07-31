@@ -1,11 +1,14 @@
 # Indicator configuration for AIBPS v0.1
 window_years: 10
+
+# Equal weights across the six pillars (renormalized among available pillars at compute time)
 weights:
-  Market: 0.25
-  Capex_Supply: 0.25
-  Infra: 0.20
-  Adoption: 0.15
-  Credit: 0.15
+  Market: 0.1667
+  Credit: 0.1667
+  Capex_Supply: 0.1667
+  Infra: 0.1667
+  Adoption: 0.1667
+  Sentiment: 0.1667
 
 indicators:
   - id: AI_Beta_Index
@@ -50,14 +53,18 @@ indicators:
     pillar: Credit
     source: fred
     fred_series: BAMLH0A0HYM2
-    transform: inverted_percentile
+    transform: percentile
   - id: IG_OAS
     pillar: Credit
     source: fred
     fred_series: BAMLCC0A0CM
-    transform: inverted_percentile
+    transform: percentile
 
 normalization:
+  defaults:
+    method: rolling_z_sigmoid
+    window: 24
+    z_clip: 4.0
   pillars:
     Market:
       method: rolling_z_sigmoid
@@ -67,23 +74,19 @@ normalization:
       method: rolling_z_sigmoid
       window: 60
       z_clip: 4.0
-Capex_Supply:
-  method: percentile
-  params:
-    min_year: 1980
-
-
+    Capex_Supply:
+      method: rolling_z_sigmoid
+      window: 24
+      z_clip: 4.0
     Infra:
       method: rolling_z_sigmoid
-      window: 36    # ~3 years
+      window: 36
       z_clip: 4.0
-
     Adoption:
       method: rolling_z_sigmoid
-      window: 24    # ~2 years, behavior/adoption pulses
+      window: 24
       z_clip: 4.0
-
     Sentiment:
       method: rolling_z_sigmoid
-      window: 24    # ~2 years, hype pulses
+      window: 24
       z_clip: 4.0

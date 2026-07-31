@@ -7,11 +7,11 @@ Fetches market data for AIBPS and creates:
    - Monthly month-end raw price/index levels
 
 2. data/processed/market_processed.csv
-   - Raw levels plus market-derived component/debug columns
+   - Raw levels, AI basket `Market` pillar input, plus debug columns
 
-Fix:
-- pandas newer versions no longer support resample("M")
-- use resample("ME") for month-end
+Pillar construction (docs/pillars.md, docs/data_sources.md):
+- Equal-weight basket of QQQ, SOXX, NVDA (rebased levels)
+- Column name `Market` is what compute.py consumes
 """
 
 from pathlib import Path
@@ -23,13 +23,22 @@ import yfinance as yf
 
 START = "2000-01-01"
 
-TICKERS = {
+# AI-tilted basket used for the Market pillar
+BASKET_TICKERS = {
+    "QQQ": "QQQ",
+    "SOXX": "SOXX",
+    "NVDA": "NVDA",
+}
+
+# Extra series kept for debug / dashboard diagnostics
+DEBUG_TICKERS = {
     "SP500": "^GSPC",
     "NASDAQ": "^IXIC",
     "VIX": "^VIX",
-    "NVDA": "NVDA",
     "BTC": "BTC-USD",
 }
+
+TICKERS = {**BASKET_TICKERS, **DEBUG_TICKERS}
 
 RAW_DIR = Path("data/raw")
 PROCESSED_DIR = Path("data/processed")
@@ -75,10 +84,43 @@ def _zscore(s: pd.Series, window: int = 60) -> pd.Series:
     return (s - mean) / std.replace(0, np.nan)
 
 
+def build_market_basket(market: pd.DataFrame, members: list[str] | None = None) -> pd.Series:
+    """
+    Equal-weight basket of rebased month-end levels.
+
+    Each available member is rebased to 100 at its first valid observation on the
+    common overlap, then averaged. Missing members are skipped.
+    """
+    if members is None:
+        members = list(BASKET_TICKERS.keys())
+
+    cols = [c for c in members if c in market.columns]
+    if not cols:
+        return pd.Series(dtype=float, name="Market")
+
+    rebased = pd.DataFrame(index=market.index)
+    for col in cols:
+        s = market[col].astype(float)
+        first = s.first_valid_index()
+        if first is None or s.loc[first] == 0 or pd.isna(s.loc[first]):
+            continue
+        rebased[col] = 100.0 * s / s.loc[first]
+
+    if rebased.empty:
+        return pd.Series(dtype=float, name="Market")
+
+    basket = rebased.mean(axis=1, skipna=True)
+    basket.name = "Market"
+    return basket
+
+
 def _make_processed(market: pd.DataFrame) -> pd.DataFrame:
-    """Create processed market features and debug component columns."""
+    """Create Market pillar input plus processed features / debug columns."""
 
     processed = market.copy()
+
+    # Canonical pillar column consumed by compute.py
+    processed["Market"] = build_market_basket(market)
 
     # Generic features for every market series
     for col in market.columns:
@@ -100,6 +142,18 @@ def _make_processed(market: pd.DataFrame) -> pd.DataFrame:
             processed["market_sp500_momentum_12m"]
         )
 
+    if "QQQ" in market.columns:
+        processed["market_qqq_momentum_12m"] = market["QQQ"].pct_change(12)
+        processed["market_qqq_momentum_12m_z"] = _zscore(
+            processed["market_qqq_momentum_12m"]
+        )
+
+    if "SOXX" in market.columns:
+        processed["market_soxx_momentum_12m"] = market["SOXX"].pct_change(12)
+        processed["market_soxx_momentum_12m_z"] = _zscore(
+            processed["market_soxx_momentum_12m"]
+        )
+
     if "NVDA" in market.columns:
         processed["market_nvda_momentum_12m"] = market["NVDA"].pct_change(12)
         processed["market_nvda_momentum_12m_z"] = _zscore(
@@ -116,7 +170,7 @@ def _make_processed(market: pd.DataFrame) -> pd.DataFrame:
         processed["market_vix_level"] = market["VIX"]
         processed["market_vix_level_z"] = _zscore(processed["market_vix_level"])
 
-    # Composite market pressure debug score
+    # Composite market pressure debug score (momentum/vol components)
     component_cols = [
         c
         for c in processed.columns
@@ -126,6 +180,9 @@ def _make_processed(market: pd.DataFrame) -> pd.DataFrame:
     if component_cols:
         processed["market_component_composite_z"] = processed[component_cols].mean(axis=1)
 
+    # Put Market first for readability
+    cols = ["Market"] + [c for c in processed.columns if c != "Market"]
+    processed = processed[cols]
     processed.index.name = "Date"
     processed = processed.sort_index()
 
@@ -170,12 +227,14 @@ def main() -> None:
     print(f"  Raw market prices: {raw_path}")
     print(f"  Processed market:  {processed_path}")
 
+    basket_cols = [c for c in BASKET_TICKERS if c in market.columns]
+    print(f"\nMarket basket members: {basket_cols}")
     print("\nProcessed columns:")
     for col in processed.columns:
         print(f"  - {col}")
 
     print("\nTail:")
-    print(processed.tail())
+    print(processed[["Market"] + basket_cols].tail())
 
 
 if __name__ == "__main__":
