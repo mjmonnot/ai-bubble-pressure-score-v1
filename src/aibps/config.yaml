@@ -1,14 +1,11 @@
 # Indicator configuration for AIBPS v0.1
 window_years: 10
-
-# Equal weights across the six pillars (renormalized among available pillars at compute time)
 weights:
-  Market: 0.1667
-  Credit: 0.1667
-  Capex_Supply: 0.1667
-  Infra: 0.1667
-  Adoption: 0.1667
-  Sentiment: 0.1667
+  Market: 0.25
+  Capex_Supply: 0.25
+  Infra: 0.20
+  Adoption: 0.15
+  Credit: 0.15
 
 indicators:
   - id: AI_Beta_Index
@@ -49,31 +46,18 @@ indicators:
     source: manual_cloud
     transform: percentile
 
-  - id: Google_Trends_AI_Basket
-    pillar: Sentiment
-    source: pytrends
-    transform: rolling_z_sigmoid
-  - id: Wikipedia_AI_Pageviews
-    pillar: Sentiment
-    source: wikimedia_pageviews
-    transform: rolling_z_sigmoid
-
   - id: HY_OAS
     pillar: Credit
     source: fred
     fred_series: BAMLH0A0HYM2
-    transform: percentile
+    transform: inverted_percentile
   - id: IG_OAS
     pillar: Credit
     source: fred
-    fred_series: BAMLC0A0CM
-    transform: percentile
+    fred_series: BAMLCC0A0CM
+    transform: inverted_percentile
 
 normalization:
-  defaults:
-    method: rolling_z_sigmoid
-    window: 24
-    z_clip: 4.0
   pillars:
     Market:
       method: rolling_z_sigmoid
@@ -83,19 +67,23 @@ normalization:
       method: rolling_z_sigmoid
       window: 60
       z_clip: 4.0
-    Capex_Supply:
-      method: rolling_z_sigmoid
-      window: 24
-      z_clip: 4.0
+Capex_Supply:
+  method: percentile
+  params:
+    min_year: 1980
+
+
     Infra:
       method: rolling_z_sigmoid
-      window: 36
+      window: 36    # ~3 years
       z_clip: 4.0
+
     Adoption:
       method: rolling_z_sigmoid
-      window: 24
+      window: 24    # ~2 years, behavior/adoption pulses
       z_clip: 4.0
+
     Sentiment:
       method: rolling_z_sigmoid
-      window: 24
+      window: 24    # ~2 years, hype pulses
       z_clip: 4.0

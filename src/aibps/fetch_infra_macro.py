@@ -81,8 +81,6 @@ def main():
     composite = rebased.mean(axis=1, skipna=True).rename("Infra")
 
     out = pd.concat([composite, rebased, df.add_suffix("_raw")], axis=1)
-    # Alias expected by older compute joins / docs
-    out["Infra_Macro"] = out["Infra"]
     out = out.dropna(how="all")
 
     PROC_OUT.parent.mkdir(parents=True, exist_ok=True)

@@ -12,10 +12,20 @@ Pillars:
 
 Canonical normalization:
 - All pillars use "rolling_z_sigmoid" -> 0–100 heat score by default.
-- Windows differ by pillar, but are configurable via config.yaml.
-"""
+- Windows differ by pillar, but are configurable via config.yaml:
 
-from __future__ import annotations
+    normalization:
+      defaults:
+        method: rolling_z_sigmoid
+        window: 24
+        z_clip: 4.0
+      pillars:
+        Market:
+          method: rolling_z_sigmoid
+          window: 120
+        ...
+
+"""
 
 import os
 import sys
@@ -37,30 +47,6 @@ PROC_DIR = os.path.join("data", "processed")
 OUT_PATH = os.path.join(PROC_DIR, "aibps_monthly.csv")
 CONFIG_PATH = os.path.join(HERE, "config.yaml")
 
-CANONICAL_PILLARS = ["Market", "Credit", "Capex_Supply", "Infra", "Adoption", "Sentiment"]
-
-# Level-like real-economy pillars trend for decades; YoY keeps them cyclical.
-YOY_PILLARS = {"Capex_Supply", "Infra", "Adoption"}
-
-# Historical months: keep long-run chart continuity (≥2 pillars, as before).
-# Live edge only: require ≥5 pillars so FRED reporting lag cannot cliff the latest print.
-# Market is required in all published months — Capex/Infra alone is not an AI bubble index.
-MIN_PILLARS_HISTORICAL = 2
-MIN_PILLARS_LIVE_EDGE = 5
-LIVE_EDGE_MONTHS = 4
-REQUIRE_MARKET = True
-
-
-def _min_pillars_by_date(index: pd.DatetimeIndex) -> pd.Series:
-    """Stricter coverage only for the most recent LIVE_EDGE_MONTHS."""
-    if len(index) == 0:
-        return pd.Series(dtype=float)
-    end = pd.Timestamp(index.max()).to_period("M").to_timestamp("M")
-    live_start = (end.to_period("M") - (LIVE_EDGE_MONTHS - 1)).to_timestamp("M")
-    required = pd.Series(MIN_PILLARS_HISTORICAL, index=index, dtype=int)
-    required.loc[index >= live_start] = MIN_PILLARS_LIVE_EDGE
-    return required
-
 
 def _read_processed(filename: str) -> pd.DataFrame | None:
     path = os.path.join(PROC_DIR, filename)
@@ -79,133 +65,37 @@ def _read_processed(filename: str) -> pd.DataFrame | None:
         return None
 
 
-def _load_config() -> dict:
-    if not os.path.exists(CONFIG_PATH):
-        print(f"ℹ️ No config.yaml at {CONFIG_PATH}; using built-in defaults.")
-        return {}
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            cfg = yaml.safe_load(f) or {}
-        print("🔧 Loaded config.yaml")
-        return cfg
-    except Exception as e:
-        print(f"❌ Failed to load config.yaml: {e}")
-        return {}
-
-
-def _load_norm_config(cfg: dict):
+def _load_norm_config():
     """
+    Load normalization config from config.yaml, if present.
+
     Returns
     -------
     defaults : dict
+        Default normalization kwargs (method, window, z_clip, etc.).
     pillar_cfg : dict
+        Mapping pillar_name -> dict of norm kwargs.
     """
-    norm_cfg = cfg.get("normalization", {}) or {}
+    if not os.path.exists(CONFIG_PATH):
+        print(f"ℹ️ No config.yaml at {CONFIG_PATH}; using built-in normalization defaults.")
+        return {}, {}
+
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"❌ Failed to load config.yaml: {e}")
+        return {}, {}
+
+    norm_cfg = cfg.get("normalization", {})
     defaults = norm_cfg.get("defaults", {}) or {}
     pillar_cfg = norm_cfg.get("pillars", {}) or {}
+    print("🔧 Loaded normalization config from config.yaml")
     return defaults, pillar_cfg
-
-
-def _load_weights(cfg: dict, pillars: list[str]) -> pd.Series:
-    """
-    Load pillar weights from config and renormalize over available pillars.
-    Falls back to equal weights.
-    """
-    raw = cfg.get("weights") or {}
-    if not raw:
-        w = np.ones(len(pillars), dtype=float)
-        return pd.Series(w / w.sum(), index=pillars)
-
-    series = pd.Series({p: float(raw.get(p, 0.0)) for p in pillars}, dtype=float)
-    if (series <= 0).all() or series.sum() == 0:
-        w = np.ones(len(pillars), dtype=float)
-        return pd.Series(w / w.sum(), index=pillars)
-
-    # Drop non-positive weights among available pillars, then renormalize
-    series = series.clip(lower=0)
-    if series.sum() == 0:
-        w = np.ones(len(pillars), dtype=float)
-        return pd.Series(w / w.sum(), index=pillars)
-    return series / series.sum()
-
-
-def _momentum_equal_weight(df: pd.DataFrame, cols: list[str]) -> pd.Series | None:
-    """Equal-weight 12m return basket for offline Market repair."""
-    present = [c for c in cols if c in df.columns]
-    if not present:
-        return None
-    moms = pd.DataFrame({c: df[c].astype(float).pct_change(12) for c in present})
-    if moms.notna().any(axis=None):
-        return moms.mean(axis=1, skipna=True)
-    return None
-
-
-def _resolve_market_raw(market: pd.DataFrame) -> pd.Series:
-    """Prefer explicit Market column; else build QQQ/SOXX/NVDA momentum basket offline."""
-    if "Market" in market.columns:
-        print("✅ Market: using explicit Market column")
-        return market["Market"]
-
-    basket = _momentum_equal_weight(market, ["QQQ", "SOXX", "NVDA"])
-    if basket is not None:
-        print("ℹ️ Market: built offline equal-weight QQQ/SOXX/NVDA 12m momentum")
-        return basket
-
-    if "market_component_composite_z" in market.columns:
-        print("ℹ️ Market: falling back to market_component_composite_z")
-        return market["market_component_composite_z"]
-
-    print(f"⚠️ Market: no basket columns; using first column ({market.columns[0]})")
-    return market.iloc[:, 0]
-
-
-def _resolve_credit_raw(credit: pd.DataFrame) -> pd.Series:
-    """
-    Resolve Credit pillar input with history-aware fallback.
-
-    Prefer an explicit Credit column when it has deep coverage. If Credit (or OAS)
-    is truncated — FRED currently limits some ICE BofA OAS series to ~3y — fall
-    back to the longer BAA–AAA spread so rolling windows have enough history.
-    """
-    min_history = 120
-    candidates: list[tuple[str, pd.Series]] = []
-
-    if "Credit" in credit.columns and credit["Credit"].notna().any():
-        candidates.append(("Credit column", credit["Credit"]))
-
-    oas_cols = [c for c in ["HY_OAS_bp", "IG_OAS_bp"] if c in credit.columns]
-    if oas_cols:
-        oas = credit[oas_cols].mean(axis=1, skipna=True)
-        candidates.append((f"OAS mean of {oas_cols}", oas))
-
-    if "BAA_AAA_spread_pct" in credit.columns:
-        candidates.append(
-            ("BAA_AAA_spread_pct (bp-scaled)", credit["BAA_AAA_spread_pct"] * 100.0)
-        )
-
-    if not candidates:
-        print(f"⚠️ Credit: no spread columns; using first column ({credit.columns[0]})")
-        return credit.iloc[:, 0]
-
-    # Prefer OAS/Credit only when coverage is deep enough; else deepest series
-    deep = [(label, s) for label, s in candidates if int(s.notna().sum()) >= min_history]
-    pool = deep if deep else candidates
-    label, series = max(pool, key=lambda item: int(item[1].notna().sum()))
-    print(f"ℹ️ Credit: using {label} (n={int(series.notna().sum())})")
-    return series
-
-
-
-def _first_matching_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
 
 
 def main():
     t0 = time.time()
-    cfg = _load_config()
 
     # ---- Load pillar inputs ----
     market = _read_processed("market_processed.csv")
@@ -217,12 +107,7 @@ def main():
     adoption = _read_processed("adoption_processed.csv")
     sentiment = _read_processed("sentiment_processed.csv")
 
-    frames = [
-        x for x in [
-            market, credit, capex, macro_capex, infra, infra_macro, adoption, sentiment
-        ]
-        if x is not None
-    ]
+    frames = [x for x in [market, credit, capex, macro_capex, infra, infra_macro, adoption, sentiment] if x is not None]
     if not frames:
         print("❌ No processed pillar data found. Aborting.")
         sys.exit(1)
@@ -242,43 +127,37 @@ def main():
 
     # Market
     if market is not None:
-        base["Market_raw"] = _resolve_market_raw(market).reindex(base.index)
+        col = "Market" if "Market" in market.columns else market.columns[0]
+        base["Market_raw"] = market[col].reindex(base.index)
 
     # Credit
     if credit is not None:
-        base["Credit_raw"] = _resolve_credit_raw(credit).reindex(base.index)
+        col = "Credit" if "Credit" in credit.columns else credit.columns[0]
+        base["Credit_raw"] = credit[col].reindex(base.index)
 
     # Capex (manual)
     if capex is not None:
-        col = _first_matching_col(capex, ["Capex_Supply", "Capex_Supply_Manual"])
-        if col:
-            base["Capex_Supply_Manual_raw"] = capex[col].reindex(base.index)
-            print(f"✅ Capex manual: using {col}")
+        if "Capex_Supply" in capex.columns:
+            base["Capex_Supply_Manual_raw"] = capex["Capex_Supply"].reindex(base.index)
+        elif "Capex_Supply_Manual" in capex.columns:
+            base["Capex_Supply_Manual_raw"] = capex["Capex_Supply_Manual"].reindex(base.index)
 
-    # Capex (macro) — accept Capex_Supply (current fetcher) or Capex_Supply_Macro
+    # Capex (macro)
     if macro_capex is not None:
-        col = _first_matching_col(macro_capex, ["Capex_Supply_Macro", "Capex_Supply"])
-        if col:
-            base["Capex_Supply_Macro_raw"] = macro_capex[col].reindex(base.index)
-            print(f"✅ Capex macro: using {col}")
-        else:
-            print("⚠️ Capex macro file present but no Capex_Supply / Capex_Supply_Macro column")
+        if "Capex_Supply_Macro" in macro_capex.columns:
+            base["Capex_Supply_Macro_raw"] = macro_capex["Capex_Supply_Macro"].reindex(base.index)
 
     # Infra (manual)
     if infra is not None:
-        col = _first_matching_col(infra, ["Infra", "Infra_Manual"])
-        if col:
-            base["Infra_Manual_raw"] = infra[col].reindex(base.index)
-            print(f"✅ Infra manual: using {col}")
+        if "Infra" in infra.columns:
+            base["Infra_Manual_raw"] = infra["Infra"].reindex(base.index)
+        elif "Infra_Manual" in infra.columns:
+            base["Infra_Manual_raw"] = infra["Infra_Manual"].reindex(base.index)
 
-    # Infra (macro) — accept Infra (current fetcher) or Infra_Macro
+    # Infra (macro)
     if infra_macro is not None:
-        col = _first_matching_col(infra_macro, ["Infra_Macro", "Infra"])
-        if col:
-            base["Infra_Macro_raw"] = infra_macro[col].reindex(base.index)
-            print(f"✅ Infra macro: using {col}")
-        else:
-            print("⚠️ Infra macro file present but no Infra / Infra_Macro column")
+        if "Infra_Macro" in infra_macro.columns:
+            base["Infra_Macro_raw"] = infra_macro["Infra_Macro"].reindex(base.index)
 
     # Adoption
     if adoption is not None:
@@ -292,49 +171,53 @@ def main():
 
     # ---- Combine manual/macro where relevant ----
 
+    # Capex_Supply = mean of manual + macro where both exist
     if ("Capex_Supply_Manual_raw" in base.columns) or ("Capex_Supply_Macro_raw" in base.columns):
         cols = [c for c in ["Capex_Supply_Manual_raw", "Capex_Supply_Macro_raw"] if c in base.columns]
         base["Capex_Supply_raw"] = base[cols].mean(axis=1, skipna=True)
-        print(f"✅ Capex_Supply_raw from: {cols}")
 
+    # Infra = mean of manual + macro where both exist
     if ("Infra_Manual_raw" in base.columns) or ("Infra_Macro_raw" in base.columns):
         cols = [c for c in ["Infra_Manual_raw", "Infra_Macro_raw"] if c in base.columns]
         base["Infra_raw"] = base[cols].mean(axis=1, skipna=True)
-        print(f"✅ Infra_raw from: {cols}")
 
     # ---- Normalization config ----
-    defaults, pillar_cfg = _load_norm_config(cfg)
+
+    defaults, pillar_cfg = _load_norm_config()
 
     def get_norm_params(pillar_name: str):
-        pcfg = pillar_cfg.get(pillar_name, {}) or {}
-        method = pcfg.get("method", defaults.get("method", "rolling_z_sigmoid"))
-        kwargs = {k: v for k, v in {**defaults, **pcfg}.items() if k != "method"}
+        """
+        Look up normalization method and kwargs for a pillar.
+
+        Precedence:
+          1) normalization.pillars.<name>.<...>
+          2) normalization.defaults.<...>
+          3) hard-coded fallback: rolling_z_sigmoid, window=24, z_clip=4.0
+        """
+        cfg = pillar_cfg.get(pillar_name, {})
+        method = cfg.get("method", defaults.get("method", "rolling_z_sigmoid"))
+        # Collect kwargs except 'method'
+        kwargs = {k: v for k, v in {**defaults, **cfg}.items() if k != "method"}
         if "window" not in kwargs:
             kwargs["window"] = 24
         if "z_clip" not in kwargs:
             kwargs["z_clip"] = 4.0
         return method, kwargs
 
+    canonical_pillars = ["Market", "Credit", "Capex_Supply", "Infra", "Adoption", "Sentiment"]
     normalized_pillars = []
 
-    for name in CANONICAL_PILLARS:
+    for name in canonical_pillars:
         raw_col = f"{name}_raw"
         if raw_col not in base.columns:
             print(f"ℹ️ No raw series for {name}; skipping.")
             continue
 
-        series_in = base[raw_col].astype(float)
-        if name in YOY_PILLARS:
-            # Prefer growth pressure over secular level drift
-            series_in = series_in.pct_change(12)
-            base[f"{name}_yoy"] = series_in
-            print(f"ℹ️ {name}: using 12-month pct change before normalization")
-
         method, kwargs = get_norm_params(name)
         print(f"🔧 Normalizing {name} with method={method}, params={kwargs}")
 
         try:
-            norm_series = normalize_series(series_in, method=method, **kwargs)
+            norm_series = normalize_series(base[raw_col], method=method, **kwargs)
         except Exception as e:
             print(f"❌ Normalization failed for {name}: {e}")
             continue
@@ -346,21 +229,51 @@ def main():
         print("❌ No pillars normalized; cannot compute AIBPS.")
         sys.exit(1)
 
+    # ---- Harmonize pillars (Capex & Infra) ----
+    # We may have manual + macro components; combine to single pillar when possible.
+
+    # Capex: combine manual + macro into Capex_Supply if needed
+    if "Capex_Supply" not in base.columns:
+        capex_sources = [c for c in ["Capex_Supply_Manual", "Capex_Supply_Macro"] if c in base.columns]
+        if capex_sources:
+            base["Capex_Supply"] = base[capex_sources].mean(axis=1, skipna=True)
+
+    # Infra: combine manual + macro into Infra if needed
+    if "Infra" not in base.columns:
+        infra_sources = [c for c in ["Infra_Manual", "Infra_Macro"] if c in base.columns]
+        if infra_sources:
+            base["Infra"] = base[infra_sources].mean(axis=1, skipna=True)
+
+    # ---- Pick the normalized pillars that actually exist ----
+    # (These are the columns we will use for the composite AIBPS)
+    candidate_pillars = ["Market", "Credit", "Capex_Supply", "Infra", "Adoption", "Sentiment"]
+    normalized_pillars = [c for c in candidate_pillars if c in base.columns]
+
     print("---- Pillars used in composite ----")
     print(normalized_pillars)
 
-    # ---- Weights from config, renormalized over available pillars ----
-    weights = _load_weights(cfg, normalized_pillars)
+    if not normalized_pillars:
+        raise RuntimeError("No normalized pillars available to compute AIBPS.")
+
+    # ---- Compute AIBPS composite (equal-weight across available pillars) ----
+    w = np.ones(len(normalized_pillars), dtype=float)
+    w = w / w.sum()
+    weights = pd.Series(w, index=normalized_pillars)
+
     print("---- Weights ----")
     print(weights)
 
     vals = base[normalized_pillars]
+
+    # Build a weight matrix aligned to vals
+    weight_vec = weights.reindex(normalized_pillars)
     weight_matrix = pd.DataFrame(
-        np.broadcast_to(weights.values, (len(vals), len(weights))),
+        np.broadcast_to(weight_vec.values, (len(vals), len(weight_vec))),
         index=vals.index,
         columns=normalized_pillars,
     )
 
+    # Only count weights where we actually have data
     effective_weights = weight_matrix.where(vals.notna())
     weighted_vals = vals * effective_weights
 
@@ -368,41 +281,19 @@ def main():
     total_w = effective_weights.sum(axis=1)
 
     composite = weighted_sum / total_w
-    composite[total_w == 0] = np.nan
+    composite[total_w == 0] = np.nan  # if no pillars, mark as NaN
 
-    # Coverage rule: ≥2 historically; ≥5 only on the live edge (see docs/methods.md).
-    # Also require Market so pre-equity Capex/Infra decades are not labeled AIBPS.
+    # Require at least 2 pillars to define AIBPS
     num_pillars_available = vals.notna().sum(axis=1)
-    min_required = _min_pillars_by_date(base.index)
-    publish_mask = num_pillars_available >= min_required
-    if REQUIRE_MARKET and "Market" in vals.columns:
-        publish_mask = publish_mask & vals["Market"].notna()
-    composite = composite.where(publish_mask)
+    composite[num_pillars_available < 2] = np.nan
 
-    base["Pillars_reporting"] = num_pillars_available
     base["AIBPS"] = composite
-    # Docs specify ~6-month smoothing; keep min_periods=1 for early history.
-    # RA follows the same live-edge freeze so the latest point cannot drift alone.
-    base["AIBPS_RA"] = base["AIBPS"].rolling(6, min_periods=1).mean()
-    base.loc[~publish_mask, "AIBPS_RA"] = np.nan
+    base["AIBPS_RA"] = base["AIBPS"].rolling(3, min_periods=1).mean()
 
-    # Keep diagnostic pillar rows even when AIBPS is frozen/blank at the live edge
-    keep_cols = [c for c in CANONICAL_PILLARS if c in base.columns] + ["AIBPS"]
-    out = base.dropna(subset=keep_cols, how="all")
+    # Drop rows where composite is NaN
+    out = base.dropna(subset=["AIBPS"], how="all")
 
-    live_frozen = int((~publish_mask & (min_required >= MIN_PILLARS_LIVE_EDGE)).sum())
-    print(
-        f"ℹ️ Publication rule: ≥{MIN_PILLARS_HISTORICAL} pillars historically; "
-        f"≥{MIN_PILLARS_LIVE_EDGE} in last {LIVE_EDGE_MONTHS} months "
-        f"(live-edge frozen months={live_frozen})"
-    )
-    published = out.dropna(subset=["AIBPS"])
-    if len(published):
-        print(
-            f"ℹ️ AIBPS span: {published.index.min().date()} → {published.index.max().date()} "
-            f"(latest pillars={int(published['Pillars_reporting'].iloc[-1])})"
-        )
-
+    # ---- Debug tail: last 6 rows for key series ----
     print("---- Columns in composite ----")
     print(list(out.columns))
 
@@ -414,20 +305,13 @@ def main():
             print(f"{name}: (missing)")
 
     print("---- Tail (Market / Capex_Supply / Infra / Credit / AIBPS_RA) ----")
-    for col in ["Market", "Capex_Supply", "Infra", "Credit", "Adoption", "Sentiment", "AIBPS_RA"]:
+    for col in ["Market", "Capex_Supply", "Infra", "Credit", "AIBPS_RA"]:
         _safe_tail(col)
 
-    non_null = {p: int(out[p].notna().sum()) for p in normalized_pillars if p in out.columns}
-    print("---- Non-null pillar months ----")
-    print(non_null)
-
+    # ---- Write out ----
     os.makedirs(PROC_DIR, exist_ok=True)
     out.to_csv(OUT_PATH)
-    elapsed = time.time() - t0
-    print(
-        f"💾 Wrote {OUT_PATH} with pillars: {normalized_pillars} "
-        f"(rows={len(out)}, {elapsed:.1f}s)"
-    )
+    print(f"💾 Wrote {OUT_PATH} with pillars: {normalized_pillars} (rows={len(out)})")
 
 
 if __name__ == "__main__":

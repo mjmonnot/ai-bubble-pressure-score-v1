@@ -349,27 +349,33 @@ def build_sentiment_composite(monthly: pd.DataFrame) -> pd.DataFrame:
         primary = pd.concat(primary_z, axis=1).mean(axis=1, skipna=True)
         if macro_z:
             macro = pd.concat(macro_z, axis=1).mean(axis=1, skipna=True)
-            # 80% AI attention / 20% macro overlay where both exist
-            out["Sentiment"] = primary.where(macro.isna(), 0.8 * primary + 0.2 * macro)
-            out["Sentiment"] = out["Sentiment"].fillna(primary)
-            print("✅ Sentiment = 80% AI attention (Trends/Wiki) + 20% FRED macro overlay")
+            # Recent: AI attention (+ light macro). Earlier history: FRED macro fill.
+            blended = primary.where(macro.isna(), 0.8 * primary + 0.2 * macro)
+            out["Sentiment"] = blended.fillna(macro).fillna(primary)
+            print("OK Sentiment = Trends/Wiki when available; FRED fills earlier history")
         else:
             out["Sentiment"] = primary
-            print("✅ Sentiment = AI attention only (Trends/Wiki)")
-        sources = []
+            print("OK Sentiment = AI attention only (Trends/Wiki)")
+        coverage = pd.Series("none", index=out.index, dtype=object)
+        has_ai = pd.Series(False, index=out.index)
         if "Sentiment_Trends" in out.columns:
-            sources.append("Trends")
+            has_ai = has_ai | out["Sentiment_Trends"].notna()
         if "Sentiment_Wiki" in out.columns:
-            sources.append("Wiki")
-        out["Sentiment_coverage"] = "+".join(sources) if sources else "none"
+            has_ai = has_ai | out["Sentiment_Wiki"].notna()
+        coverage = coverage.mask(has_ai, "Trends+Wiki")
+        if macro_z:
+            has_macro = pd.concat(macro_z, axis=1).notna().any(axis=1)
+            coverage = coverage.mask(coverage.eq("none") & has_macro, "macro")
+            coverage = coverage.mask(coverage.eq("Trends+Wiki") & has_macro, "Trends+Wiki+macro")
+        out["Sentiment_coverage"] = coverage
     elif macro_z:
         out["Sentiment"] = pd.concat(macro_z, axis=1).mean(axis=1, skipna=True)
         out["Sentiment_coverage"] = "macro_fallback"
-        print("⚠️ Sentiment falling back to FRED macro only (no Trends/Wiki)")
+        print("WARN Sentiment falling back to FRED macro only (no Trends/Wiki)")
     else:
         out["Sentiment"] = np.nan
         out["Sentiment_coverage"] = "none"
-        print("⚠️ No Sentiment components available")
+        print("WARN No Sentiment components available")
 
     # Put Sentiment first
     ordered = ["Sentiment", "Sentiment_coverage"]
@@ -387,6 +393,16 @@ def main() -> int:
     trends_new = fetch_google_trends()
     wiki_new = fetch_wikipedia_pageviews()
     fred_df = fetch_fred_overlay(get_fred_client())
+
+    # Keep prior FRED columns when the API key is missing so long history remains
+    if fred_df.empty:
+        prior = _read_csv_optional(OUT_PATH)
+        fred_cols = [
+            c for c in ["Sentiment_Consumer", "Sentiment_EPU", "Sentiment_VIX"] if c in prior.columns
+        ]
+        if fred_cols:
+            fred_df = prior[fred_cols]
+            print(f"INFO Reusing FRED sentiment columns from prior file: {fred_cols}")
 
     # --- Merge with cached raw so rate-limits don't wipe history ---
     trends_old = _read_csv_optional(TRENDS_RAW_PATH)
