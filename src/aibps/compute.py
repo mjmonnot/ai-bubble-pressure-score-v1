@@ -145,16 +145,17 @@ def _resolve_market_raw(market: pd.DataFrame) -> pd.Series:
 
 def _resolve_credit_raw(credit: pd.DataFrame) -> pd.Series:
     """
-    Prefer explicit Credit column; else best available spread proxy.
+    Resolve Credit pillar input with history-aware fallback.
 
-    OAS series are preferred when they have meaningful history. If a stale/truncated
-    OAS column has very short coverage, fall back to the longer BAA–AAA spread.
+    Prefer an explicit Credit column when it has deep coverage. If Credit (or OAS)
+    is truncated — FRED currently limits some ICE BofA OAS series to ~3y — fall
+    back to the longer BAA–AAA spread so rolling windows have enough history.
     """
-    if "Credit" in credit.columns and credit["Credit"].notna().sum() > 0:
-        print("✅ Credit: using explicit Credit column")
-        return credit["Credit"]
-
+    min_history = 120
     candidates: list[tuple[str, pd.Series]] = []
+
+    if "Credit" in credit.columns and credit["Credit"].notna().any():
+        candidates.append(("Credit column", credit["Credit"]))
 
     oas_cols = [c for c in ["HY_OAS_bp", "IG_OAS_bp"] if c in credit.columns]
     if oas_cols:
@@ -170,10 +171,13 @@ def _resolve_credit_raw(credit: pd.DataFrame) -> pd.Series:
         print(f"⚠️ Credit: no spread columns; using first column ({credit.columns[0]})")
         return credit.iloc[:, 0]
 
-    # Prefer deeper history so rolling windows have enough warm-up
-    label, series = max(candidates, key=lambda item: int(item[1].notna().sum()))
-    print(f"ℹ️ Credit: built offline from {label} (n={int(series.notna().sum())})")
+    # Prefer OAS/Credit only when coverage is deep enough; else deepest series
+    deep = [(label, s) for label, s in candidates if int(s.notna().sum()) >= min_history]
+    pool = deep if deep else candidates
+    label, series = max(pool, key=lambda item: int(item[1].notna().sum()))
+    print(f"ℹ️ Credit: using {label} (n={int(series.notna().sum())})")
     return series
+
 
 
 def _first_matching_col(df: pd.DataFrame, candidates: list[str]) -> str | None:

@@ -57,7 +57,7 @@ indicators:
   - id: IG_OAS
     pillar: Credit
     source: fred
-    fred_series: BAMLCC0A0CM
+    fred_series: BAMLC0A0CM
     transform: percentile
 
 normalization:
