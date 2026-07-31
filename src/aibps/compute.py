@@ -39,11 +39,16 @@ CONFIG_PATH = os.path.join(HERE, "config.yaml")
 
 CANONICAL_PILLARS = ["Market", "Credit", "Capex_Supply", "Infra", "Adoption", "Sentiment"]
 
+# Level-like real-economy pillars trend for decades; YoY keeps them cyclical.
+YOY_PILLARS = {"Capex_Supply", "Infra", "Adoption"}
+
 # Historical months: keep long-run chart continuity (≥2 pillars, as before).
 # Live edge only: require ≥5 pillars so FRED reporting lag cannot cliff the latest print.
+# Market is required in all published months — Capex/Infra alone is not an AI bubble index.
 MIN_PILLARS_HISTORICAL = 2
 MIN_PILLARS_LIVE_EDGE = 5
 LIVE_EDGE_MONTHS = 4
+REQUIRE_MARKET = True
 
 
 def _min_pillars_by_date(index: pd.DatetimeIndex) -> pd.Series:
@@ -124,32 +129,26 @@ def _load_weights(cfg: dict, pillars: list[str]) -> pd.Series:
     return series / series.sum()
 
 
-def _rebased_equal_weight(df: pd.DataFrame, cols: list[str]) -> pd.Series | None:
-    """Equal-weight basket of rebased levels for offline Market repair."""
+def _momentum_equal_weight(df: pd.DataFrame, cols: list[str]) -> pd.Series | None:
+    """Equal-weight 12m return basket for offline Market repair."""
     present = [c for c in cols if c in df.columns]
     if not present:
         return None
-    rebased = pd.DataFrame(index=df.index)
-    for col in present:
-        s = df[col].astype(float)
-        first = s.first_valid_index()
-        if first is None or s.loc[first] == 0 or pd.isna(s.loc[first]):
-            continue
-        rebased[col] = 100.0 * s / s.loc[first]
-    if rebased.empty:
-        return None
-    return rebased.mean(axis=1, skipna=True)
+    moms = pd.DataFrame({c: df[c].astype(float).pct_change(12) for c in present})
+    if moms.notna().any(axis=None):
+        return moms.mean(axis=1, skipna=True)
+    return None
 
 
 def _resolve_market_raw(market: pd.DataFrame) -> pd.Series:
-    """Prefer explicit Market column; else build QQQ/SOXX/NVDA basket offline."""
+    """Prefer explicit Market column; else build QQQ/SOXX/NVDA momentum basket offline."""
     if "Market" in market.columns:
         print("✅ Market: using explicit Market column")
         return market["Market"]
 
-    basket = _rebased_equal_weight(market, ["QQQ", "SOXX", "NVDA"])
+    basket = _momentum_equal_weight(market, ["QQQ", "SOXX", "NVDA"])
     if basket is not None:
-        print("ℹ️ Market: built offline equal-weight QQQ/SOXX/NVDA basket")
+        print("ℹ️ Market: built offline equal-weight QQQ/SOXX/NVDA 12m momentum")
         return basket
 
     if "market_component_composite_z" in market.columns:
@@ -324,11 +323,18 @@ def main():
             print(f"ℹ️ No raw series for {name}; skipping.")
             continue
 
+        series_in = base[raw_col].astype(float)
+        if name in YOY_PILLARS:
+            # Prefer growth pressure over secular level drift
+            series_in = series_in.pct_change(12)
+            base[f"{name}_yoy"] = series_in
+            print(f"ℹ️ {name}: using 12-month pct change before normalization")
+
         method, kwargs = get_norm_params(name)
         print(f"🔧 Normalizing {name} with method={method}, params={kwargs}")
 
         try:
-            norm_series = normalize_series(base[raw_col], method=method, **kwargs)
+            norm_series = normalize_series(series_in, method=method, **kwargs)
         except Exception as e:
             print(f"❌ Normalization failed for {name}: {e}")
             continue
@@ -364,10 +370,13 @@ def main():
     composite = weighted_sum / total_w
     composite[total_w == 0] = np.nan
 
-    # Coverage rule: ≥2 historically; ≥5 only on the live edge (see docs/methods.md)
+    # Coverage rule: ≥2 historically; ≥5 only on the live edge (see docs/methods.md).
+    # Also require Market so pre-equity Capex/Infra decades are not labeled AIBPS.
     num_pillars_available = vals.notna().sum(axis=1)
     min_required = _min_pillars_by_date(base.index)
     publish_mask = num_pillars_available >= min_required
+    if REQUIRE_MARKET and "Market" in vals.columns:
+        publish_mask = publish_mask & vals["Market"].notna()
     composite = composite.where(publish_mask)
 
     base["Pillars_reporting"] = num_pillars_available

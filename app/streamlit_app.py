@@ -211,18 +211,20 @@ x_max = df_plot["date"].max()
 
 bands_df = pd.DataFrame(
     [
-        {"date_start": x_min, "date_end": x_max, "ymin": 0, "ymax": 25, "label": "Low"},
-        {"date_start": x_min, "date_end": x_max, "ymin": 25, "ymax": 50, "label": "Elevated"},
-        {"date_start": x_min, "date_end": x_max, "ymin": 50, "ymax": 75, "label": "High"},
-        {"date_start": x_min, "date_end": x_max, "ymin": 75, "ymax": 100, "label": "Extreme"},
+        {"date_start": x_min, "date_end": x_max, "ymin": 0, "ymax": 25, "label": "Cold"},
+        {"date_start": x_min, "date_end": x_max, "ymin": 25, "ymax": 50, "label": "Stable"},
+        {"date_start": x_min, "date_end": x_max, "ymin": 50, "ymax": 75, "label": "Elevated"},
+        {"date_start": x_min, "date_end": x_max, "ymin": 75, "ymax": 90, "label": "Stretched"},
+        {"date_start": x_min, "date_end": x_max, "ymin": 90, "ymax": 100, "label": "Bubble"},
     ]
 )
 
 band_colors = {
-    "Low": "#d9f0d3",
+    "Cold": "#d9f0d3",
+    "Stable": "#e8f5e9",
     "Elevated": "#ffffbf",
-    "High": "#fee090",
-    "Extreme": "#fc8d59",
+    "Stretched": "#fee090",
+    "Bubble": "#fc8d59",
 }
 
 bands = (
@@ -244,7 +246,7 @@ bands = (
     )
 )
 
-thresholds_df = pd.DataFrame({"y": [25, 50, 75]})
+thresholds_df = pd.DataFrame({"y": [25, 50, 75, 90]})
 
 regime_rules = (
     alt.Chart(thresholds_df)

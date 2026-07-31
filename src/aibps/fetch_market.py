@@ -86,10 +86,11 @@ def _zscore(s: pd.Series, window: int = 60) -> pd.Series:
 
 def build_market_basket(market: pd.DataFrame, members: list[str] | None = None) -> pd.Series:
     """
-    Equal-weight basket of rebased month-end levels.
+    Equal-weight basket of 12-month returns (momentum), not price levels.
 
-    Each available member is rebased to 100 at its first valid observation on the
-    common overlap, then averaged. Missing members are skipped.
+    Rebased NVDA/SOXX levels trend for decades and pin the Market pillar in the
+    high 70–90s after rolling-z normalization, flattening AIBPS. Momentum keeps
+    the pillar cyclical and centered near neutral in calm regimes.
     """
     if members is None:
         members = list(BASKET_TICKERS.keys())
@@ -98,18 +99,14 @@ def build_market_basket(market: pd.DataFrame, members: list[str] | None = None) 
     if not cols:
         return pd.Series(dtype=float, name="Market")
 
-    rebased = pd.DataFrame(index=market.index)
+    moms = pd.DataFrame(index=market.index)
     for col in cols:
-        s = market[col].astype(float)
-        first = s.first_valid_index()
-        if first is None or s.loc[first] == 0 or pd.isna(s.loc[first]):
-            continue
-        rebased[col] = 100.0 * s / s.loc[first]
+        moms[col] = market[col].astype(float).pct_change(12)
 
-    if rebased.empty:
+    if moms.empty:
         return pd.Series(dtype=float, name="Market")
 
-    basket = rebased.mean(axis=1, skipna=True)
+    basket = moms.mean(axis=1, skipna=True)
     basket.name = "Market"
     return basket
 

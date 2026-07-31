@@ -99,6 +99,19 @@ Applied via `normalize.py`:
 - Clips extreme outliers
 - Passes through logistic sigmoid → stable 0–100 scale
 
+### Pre-transforms (important for interpretability)
+
+Before rolling-z-sigmoid, some pillars are converted so secular drift does not pin them in the “high” band for decades:
+
+| Pillar | Input to normalization |
+|--------|------------------------|
+| **Market** | Equal-weight **12-month return** of QQQ / SOXX / NVDA (momentum), not rebased price levels |
+| **Credit** | Spread level (OAS / BAA–AAA backbone) |
+| **Capex / Infra / Adoption** | **12-month percent change** of the underlying level series |
+| **Sentiment** | AI-attention composite (Trends + Wiki, optional FRED overlay) |
+
+Without the YoY / momentum step, trending level series (software spending, fixed investment, NVDA prices) stay above their recent mean for long stretches and the composite looks permanently “elevated,” offering little regime contrast.
+
 ### Alternatives
 - Percentile rank  
 - Standard z-score (for debugging)
@@ -130,16 +143,13 @@ The system also computes:
 - **z-intensity metrics** (internal)
 - **Pillars_reporting** → count of non-missing pillars in month _t_
 
-### Publication freeze (live edge only)
+### Publication rules
 
-To avoid a false cliff when slow FRED pillars lag, the **most recent 4 months** are published only when at least **5 of 6 pillars** have reported.
+1. **Market required** — AIBPS is only published when the Market pillar is present. Capex/Infra decades before the equity basket are not labeled as AI bubble pressure.
+2. **Live-edge freeze** — In the **most recent 4 months**, publish only when ≥ **5 of 6** pillars have reported (avoids false cliffs from FRED lag).
+3. **Historical months** — before that live window, publish when ≥ **2** pillars are available (and Market is present).
 
-- **Historical months** (everything before that live window): publish AIBPS when ≥ **2** pillars are available — preserving the long-run chart and regime comparisons.
-- **Live edge** (last 4 months of the sample): if `Pillars_reporting(t) < 5`, `AIBPS(t)` and `AIBPS_RA(t)` are left blank and the headline reading stays on the last sufficiently complete month.
-- Incomplete live-edge months still retain pillar-level values in `aibps_monthly.csv` for diagnostics.
-- Once Capex/Infra/Adoption catch up in a later refresh, the frozen month is filled in automatically.
-
-This rule is intentionally **not** applied to the full history: requiring 5 pillars back through time would truncate early decades (before Sentiment and other series exist) and distort the demonstrated long-run path.
+Incomplete live-edge months still retain pillar-level values in `aibps_monthly.csv` for diagnostics; once Capex/Infra/Adoption catch up, the frozen month fills in automatically.
 
 ---
 
@@ -147,11 +157,11 @@ This rule is intentionally **not** applied to the full history: requiring 5 pill
 
 | AIBPS Range | Interpretation |
 |-------------|----------------|
-| **0–20**    | Deep stress, washout, capitulation |
-| **20–40**   | Below-trend conditions |
-| **40–60**   | Normal / typical | 
-| **60–80**   | Elevated, overheating |
-| **80–100**  | Bubble-like conditions |
+| **0–25**    | Cold / early-cycle |
+| **25–50**   | Stable / neutral |
+| **50–75**   | Elevated / late-cycle |
+| **75–90**   | Stretched / fragile |
+| **90–100**  | Bubble-like conditions |
 
 **Important:**  
 AIBPS ≠ prediction.  
