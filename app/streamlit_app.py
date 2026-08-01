@@ -233,6 +233,8 @@ band_colors = {
     "High": "#fee090",
     "Extreme": "#fc8d59",
 }
+# Legend top→bottom matches the chart (Extreme at top / high y, Low at bottom).
+regime_legend_order = ["Extreme", "High", "Elevated", "Low"]
 
 bands = (
     alt.Chart(bands_df)
@@ -245,8 +247,8 @@ bands = (
         color=alt.Color(
             "label:N",
             scale=alt.Scale(
-                domain=list(band_colors.keys()),
-                range=list(band_colors.values()),
+                domain=regime_legend_order,
+                range=[band_colors[k] for k in regime_legend_order],
             ),
             legend=alt.Legend(title="Regime"),
         ),
