@@ -105,7 +105,13 @@ with st.sidebar:
 # ---------- Prepare composite ----------
 pillars_df = df[available_pillars].copy()
 n_reporting = pillars_df.notna().sum(axis=1)
-n_pillars = len(available_pillars)
+
+# Capex is often months behind; headline completeness ignores it so "As of" stays current.
+headline_pillars = [p for p in available_pillars if p != "Capex_Supply"]
+if not headline_pillars:
+    headline_pillars = list(available_pillars)
+n_headline = len(headline_pillars)
+headline_complete = pillars_df[headline_pillars].notna().all(axis=1)
 
 # Keep the prior in-app composite math so the chart series is unchanged.
 comp_in_app_raw = (pillars_df * weights).sum(axis=1)
@@ -137,6 +143,7 @@ comp_df = pd.DataFrame(
         "Composite_raw": comp_raw,
         "Composite_RA": comp_ra,
         "n_reporting": n_reporting,
+        "headline_complete": headline_complete,
     }
 ).dropna(how="all", subset=["Composite_raw", "Composite_RA"])
 
@@ -150,10 +157,10 @@ else:
     comp_df["Composite"] = comp_df["Composite_raw"]
 
 # ---------- Top summary ----------
-# Headline uses the last month with every pillar present; chart keeps the full series.
-all_pillars = comp_df["n_reporting"] >= n_pillars
-if all_pillars.any():
-    latest_comp_date = all_pillars[all_pillars].index.max()
+# Headline: last month with Market/Credit/Infra/Adoption/Sentiment; chart unchanged.
+complete_mask = comp_df["headline_complete"]
+if complete_mask.any():
+    latest_comp_date = complete_mask[complete_mask].index.max()
 else:
     latest_comp_date = comp_df["n_reporting"].idxmax()
 
@@ -172,19 +179,20 @@ with col_c:
     st.write(f"Source: {composite_source}")
 
 data_tip = df.index.max().strftime("%Y-%m-%d")
-latest_n = int(comp_df.loc[latest_comp_date, "n_reporting"])
 if data_tip != latest_str:
     st.caption(
-        f"Note: Latest reading is as of {latest_str}, the most recent month with all "
-        f"{n_pillars} pillars present ({latest_n} of {n_pillars}). "
-        f"Pillar inputs currently extend to {data_tip}, but later months are incomplete "
-        "(typically lagging Capex, Infra, and/or Adoption) and are omitted from the "
-        "headline so a coverage gap is not mistaken for a drop in pressure. "
-        "The chart below still shows the full composite series."
+        f"Note: Latest reading is as of {latest_str}, the most recent month with "
+        f"Market, Credit, Infra, Adoption, and Sentiment all present "
+        f"({n_headline} core pillars). Capex is excluded from this check because it "
+        f"lags far behind the others. Pillar inputs currently extend to {data_tip}; "
+        "later incomplete months are omitted from the headline so a coverage gap is "
+        "not mistaken for a drop in pressure. The chart below still shows the full "
+        "composite series."
     )
 else:
     st.caption(
-        f"Note: Latest reading uses {latest_str}, when all {n_pillars} pillars were present."
+        f"Note: Latest reading uses {latest_str}, when all {n_headline} core pillars "
+        "(excluding lagged Capex) were present."
     )
 
 st.markdown("---")
