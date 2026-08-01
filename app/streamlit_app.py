@@ -106,8 +106,10 @@ with st.sidebar:
 pillars_df = df[available_pillars].copy()
 n_reporting = pillars_df.notna().sum(axis=1)
 
-# Capex is often months behind; headline completeness ignores it so "As of" stays current.
-headline_pillars = [p for p in available_pillars if p != "Capex_Supply"]
+# Headline uses high-frequency pillars only. Capex/Adoption (and often Infra) lag
+# by many months; requiring them freezes "As of" far behind the live edge.
+HEADLINE_PILLARS = ["Market", "Credit", "Sentiment"]
+headline_pillars = [p for p in HEADLINE_PILLARS if p in available_pillars]
 if not headline_pillars:
     headline_pillars = list(available_pillars)
 n_headline = len(headline_pillars)
@@ -157,15 +159,33 @@ else:
     comp_df["Composite"] = comp_df["Composite_raw"]
 
 # ---------- Top summary ----------
-# Headline: last month with Market/Credit/Infra/Adoption/Sentiment; chart unchanged.
+# Headline: last month with Market+Credit+Sentiment; chart unchanged.
 complete_mask = comp_df["headline_complete"]
 if complete_mask.any():
     latest_comp_date = complete_mask[complete_mask].index.max()
 else:
     latest_comp_date = comp_df["n_reporting"].idxmax()
 
-latest_val = float(comp_df.loc[latest_comp_date, "Composite"])
 latest_str = latest_comp_date.strftime("%Y-%m-%d")
+
+# Headline value reweights only pillars present that month. The chart keeps the
+# original in-app sum (unchanged); without this, sparse months look artificially low.
+if composite_source == "In-app recomputed":
+    weighted = pillars_df.mul(weights, axis=1)
+    avail_w = pillars_df.notna().mul(weights, axis=1).sum(axis=1)
+    headline_raw = weighted.sum(axis=1) / avail_w.replace(0, np.nan)
+    headline_ra = headline_raw.rolling(3, min_periods=1).mean()
+    headline_series = headline_ra if plot_series.startswith("Rolling") else headline_raw
+    latest_val = float(headline_series.loc[latest_comp_date])
+else:
+    latest_val = float(comp_df.loc[latest_comp_date, "Composite"])
+
+# Per-pillar last dates for the footnote (helps explain lagging series).
+pillar_asof = {
+    p: pillars_df[p].dropna().index.max().strftime("%Y-%m")
+    for p in available_pillars
+    if pillars_df[p].notna().any()
+}
 
 col_a, col_b, col_c = st.columns(3)
 
@@ -179,21 +199,14 @@ with col_c:
     st.write(f"Source: {composite_source}")
 
 data_tip = df.index.max().strftime("%Y-%m-%d")
-if data_tip != latest_str:
-    st.caption(
-        f"Note: Latest reading is as of {latest_str}, the most recent month with "
-        f"Market, Credit, Infra, Adoption, and Sentiment all present "
-        f"({n_headline} core pillars). Capex is excluded from this check because it "
-        f"lags far behind the others. Pillar inputs currently extend to {data_tip}; "
-        "later incomplete months are omitted from the headline so a coverage gap is "
-        "not mistaken for a drop in pressure. The chart below still shows the full "
-        "composite series."
-    )
-else:
-    st.caption(
-        f"Note: Latest reading uses {latest_str}, when all {n_headline} core pillars "
-        "(excluding lagged Capex) were present."
-    )
+lag_bits = ", ".join(f"{p}→{pillar_asof[p]}" for p in available_pillars if p in pillar_asof)
+st.caption(
+    f"Note: Latest reading is as of {latest_str}, the most recent month with "
+    f"Market, Credit, and Sentiment all present. Capex, Adoption, and Infra often "
+    f"lag (publication delay), so they are not required for the headline date. "
+    f"Pillar coverage: {lag_bits}. "
+    f"Inputs extend to {data_tip}; the chart below still shows the full composite series."
+)
 
 st.markdown("---")
 
