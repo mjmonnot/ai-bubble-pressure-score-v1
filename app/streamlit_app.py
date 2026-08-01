@@ -107,10 +107,8 @@ pillars_df = df[available_pillars].copy()
 n_reporting = pillars_df.notna().sum(axis=1)
 n_pillars = len(available_pillars)
 
-# Renormalize weights over pillars present each month (avoid NaN -> 0 drag).
-weighted = pillars_df.mul(weights, axis=1)
-avail_w = pillars_df.notna().mul(weights, axis=1).sum(axis=1)
-comp_in_app_raw = weighted.sum(axis=1) / avail_w.replace(0, np.nan)
+# Keep the prior in-app composite math so the chart series is unchanged.
+comp_in_app_raw = (pillars_df * weights).sum(axis=1)
 comp_in_app_ra = comp_in_app_raw.rolling(3, min_periods=1).mean()
 
 precomp_raw = df["AIBPS"] if "AIBPS" in df.columns else None
